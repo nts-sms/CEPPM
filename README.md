@@ -16,7 +16,7 @@ This model was implemented in Python using algorithms designed by the author and
 1. **Clone the repository**: 
    `git clone https://github.com/nts-sms/CEPPM`
 2. **Install dependencies**: 
-   `pip install numpy matplotlib scipy jupyter`
+   `pip install numpy scipy matplotlib pandas seaborn`
 3. **Run the simulation**: 
    Open and run `CEPPM_2026.ipynb` in a CoLab environment to generate the plots shown in the paper.
 
