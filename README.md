@@ -19,6 +19,8 @@ This model was implemented in Python using algorithms designed by the author and
    `pip install numpy scipy matplotlib pandas seaborn`
 3. **Run the simulation**: 
    Open and run `CEPPM_2026.ipynb` in a CoLab environment to generate the plots shown in the paper.
+   Open and run 'run_scenarios.py' to reproduce the model results for the control and 3 harvest regime scenarios
+   Open and run 'sensitivity_h025.py' and 'sensitivity_h04.py' to reproduce the sensitivity analyses for delta and r_stoat at critical threshold (0.25) and recommended (0.40) harvest rates respectively
 
 ## Author
 **Sierra M. Sharma** - Independent Researcher
