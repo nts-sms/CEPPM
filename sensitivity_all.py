@@ -234,3 +234,259 @@ for hr_label, res in all_results.items():
     print(f"Saved: {fname}")
 
 print("\nAll sensitivity plots saved.")
+
+# ============================================================================
+# PART 2: ALPHA AND BETA SENSITIVITY
+# Varies predation rate (alpha) and conversion efficiency (beta) independently,
+# with delta and r_stoat held at baseline. Run at three harvest rates to show
+# how parameter sensitivity changes across management regimes.
+# ============================================================================
+
+ALPHA_RANGE  = np.linspace(0.010, 0.100, 25)
+BETA_RANGE   = np.linspace(0.005, 0.050, 25)
+ALPHA_BASE   = alpha    # 0.044
+BETA_BASE    = beta     # 0.0175
+
+def make_system_ab(alpha_p, beta_p):
+    """ODE system with variable alpha and beta, delta and r_stoat at baseline."""
+    S_floor_p = 8*(1 - delta/R_STOAT)
+    def system(t, y, hr=0):
+        x,K,S = y; x=np.clip(x,0.01,0.99); K=max(K,0); S=max(S,0)
+        sig = 1/(1+np.exp(-3.0*(S-1.0)))
+        dp = np.array([
+            [max(BASE_PAYOFFS[0,0]-0.40*sig,0.01), max(BASE_PAYOFFS[0,1]-0.40*sig,0.01)],
+            [max(BASE_PAYOFFS[1,0]-0.15*sig,0.01), max(BASE_PAYOFFS[1,1]-0.15*sig,0.01)]
+        ])
+        pA=x*dp[0,0]+(1-x)*dp[0,1]; pB=x*dp[1,0]+(1-x)*dp[1,1]
+        pav=x*pA+(1-x)*pB; dxdt=x*(pA-pav) if 0<x<1 else 0
+        r_eff = r_base*(avg_payoff_base(x)/PI_BAR_ESS)
+        a_eff = alpha_p*(x*1.3+(1-x)*0.7)
+        f_K   = (a_eff*K)/(1+a_eff*h_handling*K)
+        dKdt  = r_eff*K*(1-K/K_MAX)-f_K*S
+        nat   = R_STOAT*S*(1-S/S_MAX)+beta_p*f_K*S-delta*S
+        nkg   = R_STOAT*S*(1-S/S_MAX)-delta*S
+        if S<=S_floor_p and nkg<0: nat=max(nat,0.0)
+        return [dxdt, dKdt, nat-hr*S]
+    return system
+
+def simulate_ab(alpha_p, beta_p, hr, it=INTERVENTION_YR, t_max=T_MAX):
+    sys = make_system_ab(alpha_p, beta_p)
+    y0  = [X0, K0, S0]
+    t1  = np.linspace(0, it, max(200, it*20))
+    t2  = np.linspace(it, t_max, max(800, (t_max-it)*10))
+    try:
+        s1=solve_ivp(lambda t,y:sys(t,y,0),[0,it],y0,
+                     t_eval=t1,method='RK45',rtol=1e-8,atol=1e-10)
+        s2=solve_ivp(lambda t,y:sys(t,y,hr),[it,t_max],
+                     [s1.y[0][-1],s1.y[1][-1],s1.y[2][-1]],
+                     t_eval=t2,method='RK45',rtol=1e-8,atol=1e-10)
+        return float(s2.y[0][-1]), float(s2.y[1][-1]), float(s2.y[2][-1])
+    except:
+        return np.nan, np.nan, np.nan
+
+# ── Run sweeps ────────────────────────────────────────────────────────────────
+print("\n" + "="*60)
+print("PART 2: Alpha and Beta Sensitivity")
+print("="*60)
+
+ab_results = {}
+for hr_fixed, hr_label in harvest_runs:
+    print(f"\nRunning α/β sensitivity: {hr_label}")
+
+    # 1D alpha sweep (beta fixed)
+    x_a=[]; K_a=[]
+    for av in ALPHA_RANGE:
+        xf,Kf,_ = simulate_ab(av, BETA_BASE, hr_fixed)
+        x_a.append(xf); K_a.append(Kf)
+
+    # 1D beta sweep (alpha fixed)
+    x_b=[]; K_b=[]
+    for bv in BETA_RANGE:
+        xf,Kf,_ = simulate_ab(ALPHA_BASE, bv, hr_fixed)
+        x_b.append(xf); K_b.append(Kf)
+
+    # 2D grid
+    X_grid_ab = np.full((len(ALPHA_RANGE), len(BETA_RANGE)), np.nan)
+    K_grid_ab = np.full_like(X_grid_ab, np.nan)
+    for i,av in enumerate(ALPHA_RANGE):
+        for j,bv in enumerate(BETA_RANGE):
+            xf,Kf,_ = simulate_ab(av, bv, hr_fixed)
+            X_grid_ab[i,j] = xf*100; K_grid_ab[i,j] = Kf
+
+    ab_results[hr_label] = {'x_a':x_a,'K_a':K_a,'x_b':x_b,'K_b':K_b,
+                             'X_grid':X_grid_ab,'K_grid':K_grid_ab,'hr':hr_fixed}
+    print(f"  Done.")
+
+# ── Print tables ──────────────────────────────────────────────────────────────
+for hr_label, res in ab_results.items():
+    hr_fixed = res['hr']
+    print(f"\n{'='*65}")
+    print(f"α sweep  ({hr_label}, β={BETA_BASE}, t={T_MAX})")
+    print(f"Baseline α={ALPHA_BASE}")
+    print(f"{'='*65}")
+    print(f"{'alpha':>8} {'x% open':>10} {'K (kiwi)':>10}  note")
+    print("-"*50)
+    for av,xf,Kf in zip(ALPHA_RANGE, res['x_a'], res['K_a']):
+        note = '<-- baseline' if abs(av-ALPHA_BASE)<0.002 else ''
+        ext  = 'EXTINCT' if (not np.isnan(Kf) and Kf<1) else ''
+        print(f"  {av:.4f}   {xf*100 if not np.isnan(xf) else float('nan'):8.1f}%"
+              f"   {Kf if not np.isnan(Kf) else float('nan'):8.1f}  {ext}{note}")
+
+    print(f"\n{'='*65}")
+    print(f"β sweep  ({hr_label}, α={ALPHA_BASE}, t={T_MAX})")
+    print(f"Baseline β={BETA_BASE}")
+    print(f"{'='*65}")
+    print(f"{'beta':>8} {'x% open':>10} {'K (kiwi)':>10}  note")
+    print("-"*50)
+    for bv,xf,Kf in zip(BETA_RANGE, res['x_b'], res['K_b']):
+        note = '<-- baseline' if abs(bv-BETA_BASE)<0.001 else ''
+        ext  = 'EXTINCT' if (not np.isnan(Kf) and Kf<1) else ''
+        print(f"  {bv:.4f}   {xf*100 if not np.isnan(xf) else float('nan'):8.1f}%"
+              f"   {Kf if not np.isnan(Kf) else float('nan'):8.1f}  {ext}{note}")
+
+# ── Plots ─────────────────────────────────────────────────────────────────────
+for hr_label, res in ab_results.items():
+    hr_fixed = res['hr']
+    fig = plt.figure(figsize=(18, 16))
+    gs  = gridspec.GridSpec(3, 3, figure=fig, hspace=0.45, wspace=0.38)
+    from matplotlib.patches import Patch
+
+    # Row 1: alpha sweep
+    ax1=fig.add_subplot(gs[0,0]); ax2=fig.add_subplot(gs[0,1]); ax3=fig.add_subplot(gs[0,2])
+
+    ax1.plot(ALPHA_RANGE, [v*100 if not np.isnan(v) else np.nan for v in res['x_a']],
+             'b-o', lw=2, ms=4)
+    ax1.axvline(ALPHA_BASE, color='red', ls='--', lw=1.5, label=f'Baseline α={ALPHA_BASE}')
+    ax1.set_xlabel('α (predation rate)', fontsize=10)
+    ax1.set_ylabel('Open foraging % at t=200', fontsize=10)
+    ax1.set_title(f'Open foraging vs α\n(β={BETA_BASE} fixed, {hr_label})', fontsize=10)
+    ax1.legend(fontsize=8); ax1.grid(True, alpha=0.3)
+
+    ax2.plot(ALPHA_RANGE, [v if not np.isnan(v) else np.nan for v in res['K_a']],
+             'g-o', lw=2, ms=4)
+    ax2.axhline(K0,   color='gray',  ls=':', lw=1.2, alpha=0.7, label=f'K0={K0}')
+    ax2.axhline(K_MAX,color='green', ls=':', lw=1.2, alpha=0.5, label=f'K_max={K_MAX}')
+    ax2.axvline(ALPHA_BASE, color='red', ls='--', lw=1.5, label=f'Baseline α={ALPHA_BASE}')
+    ax2.axhspan(0, 5, alpha=0.06, color='red', label='Extinction zone')
+    ax2.set_xlabel('α (predation rate)', fontsize=10)
+    ax2.set_ylabel('Kiwi at t=200', fontsize=10)
+    ax2.set_title(f'Kiwi outcome vs α\n(β={BETA_BASE} fixed, {hr_label})', fontsize=10)
+    ax2.legend(fontsize=7.5); ax2.grid(True, alpha=0.3)
+
+    # Elasticity panel for alpha
+    bi = np.argmin(np.abs(ALPHA_RANGE - ALPHA_BASE))
+    Ka = res['K_a']
+    if (0 < bi < len(Ka)-1 and
+        not any(np.isnan(v) for v in [Ka[bi-1], Ka[bi], Ka[bi+1]]) and
+        Ka[bi] > 1):
+        s = ((Ka[bi+1]-Ka[bi-1])/Ka[bi]) / ((ALPHA_RANGE[bi+1]-ALPHA_RANGE[bi-1])/ALPHA_BASE)
+        ax3.text(0.5, 0.5, f'Elasticity of K to α\nat baseline:\n\n{s:.3f}\n\n'
+                 f'(1% ↑ α → {s:.2f}% change in K)',
+                 ha='center', va='center', fontsize=13, transform=ax3.transAxes,
+                 bbox=dict(boxstyle='round,pad=0.6', facecolor='#E1F5EE', edgecolor='#0F6E56'))
+    else:
+        ax3.text(0.5, 0.5, 'Baseline at or near\nextinction boundary\n— elasticity undefined\nor K≈0',
+                 ha='center', va='center', fontsize=12, transform=ax3.transAxes,
+                 bbox=dict(boxstyle='round,pad=0.6', facecolor='#FAEEDA', edgecolor='#854F0B'))
+    ax3.axis('off')
+    ax3.set_title(f'α sensitivity coefficient\n({hr_label})', fontsize=10)
+
+    # Row 2: beta sweep
+    ax4=fig.add_subplot(gs[1,0]); ax5=fig.add_subplot(gs[1,1]); ax6=fig.add_subplot(gs[1,2])
+
+    ax4.plot(BETA_RANGE, [v*100 if not np.isnan(v) else np.nan for v in res['x_b']],
+             'b-o', lw=2, ms=4)
+    ax4.axvline(BETA_BASE, color='red', ls='--', lw=1.5, label=f'Baseline β={BETA_BASE}')
+    ax4.set_xlabel('β (conversion efficiency)', fontsize=10)
+    ax4.set_ylabel('Open foraging % at t=200', fontsize=10)
+    ax4.set_title(f'Open foraging vs β\n(α={ALPHA_BASE} fixed, {hr_label})', fontsize=10)
+    ax4.legend(fontsize=8); ax4.grid(True, alpha=0.3)
+
+    ax5.plot(BETA_RANGE, [v if not np.isnan(v) else np.nan for v in res['K_b']],
+             'g-o', lw=2, ms=4)
+    ax5.axhline(K0,   color='gray',  ls=':', lw=1.2, alpha=0.7, label=f'K0={K0}')
+    ax5.axhline(K_MAX,color='green', ls=':', lw=1.2, alpha=0.5, label=f'K_max={K_MAX}')
+    ax5.axvline(BETA_BASE, color='red', ls='--', lw=1.5, label=f'Baseline β={BETA_BASE}')
+    ax5.axhspan(0, 5, alpha=0.06, color='red', label='Extinction zone')
+    ax5.set_xlabel('β (conversion efficiency)', fontsize=10)
+    ax5.set_ylabel('Kiwi at t=200', fontsize=10)
+    ax5.set_title(f'Kiwi outcome vs β\n(α={ALPHA_BASE} fixed, {hr_label})', fontsize=10)
+    ax5.legend(fontsize=7.5); ax5.grid(True, alpha=0.3)
+
+    # Elasticity panel for beta
+    bi = np.argmin(np.abs(BETA_RANGE - BETA_BASE))
+    Kb = res['K_b']
+    if (0 < bi < len(Kb)-1 and
+        not any(np.isnan(v) for v in [Kb[bi-1], Kb[bi], Kb[bi+1]]) and
+        Kb[bi] > 1):
+        s = ((Kb[bi+1]-Kb[bi-1])/Kb[bi]) / ((BETA_RANGE[bi+1]-BETA_RANGE[bi-1])/BETA_BASE)
+        ax6.text(0.5, 0.5, f'Elasticity of K to β\nat baseline:\n\n{s:.3f}\n\n'
+                 f'(1% ↑ β → {s:.2f}% change in K)',
+                 ha='center', va='center', fontsize=13, transform=ax6.transAxes,
+                 bbox=dict(boxstyle='round,pad=0.6', facecolor='#E1F5EE', edgecolor='#0F6E56'))
+    else:
+        ax6.text(0.5, 0.5, 'β insensitive across\nfull range — flat\nresponse throughout',
+                 ha='center', va='center', fontsize=12, transform=ax6.transAxes,
+                 bbox=dict(boxstyle='round,pad=0.6', facecolor='#FAEEDA', edgecolor='#854F0B'))
+    ax6.axis('off')
+    ax6.set_title(f'β sensitivity coefficient\n({hr_label})', fontsize=10)
+
+    # Row 3: 2D heatmaps in (alpha, beta) space
+    ax7=fig.add_subplot(gs[2,0]); ax8=fig.add_subplot(gs[2,1]); ax9=fig.add_subplot(gs[2,2])
+    A_mesh, B_mesh = np.meshgrid(ALPHA_RANGE, BETA_RANGE, indexing='ij')
+
+    im7 = ax7.contourf(A_mesh, B_mesh, res['X_grid'], levels=20, cmap='RdYlGn')
+    ax7.axvline(ALPHA_BASE, color='white', ls='--', lw=1.5, label=f'Baseline α')
+    ax7.axhline(BETA_BASE,  color='white', ls=':',  lw=1.5, label=f'Baseline β')
+    ax7.plot(ALPHA_BASE, BETA_BASE, 'w*', ms=14, label='Baseline', zorder=5)
+    plt.colorbar(im7, ax=ax7, label='Open foraging % at t=200')
+    ax7.set_xlabel('α (predation rate)', fontsize=10)
+    ax7.set_ylabel('β (conversion efficiency)', fontsize=10)
+    ax7.set_title(f'Open foraging % — 2D (α, β)\n({hr_label})', fontsize=10)
+    ax7.legend(fontsize=8)
+
+    im8 = ax8.contourf(A_mesh, B_mesh, res['K_grid'], levels=20, cmap='RdYlGn')
+    ax8.contour(A_mesh, B_mesh, res['K_grid'], levels=[K0],
+                colors='white', linewidths=1.5, linestyles='--')
+    ax8.axvline(ALPHA_BASE, color='white', ls='--', lw=1.5)
+    ax8.axhline(BETA_BASE,  color='white', ls=':',  lw=1.5)
+    ax8.plot(ALPHA_BASE, BETA_BASE, 'w*', ms=14, label='Baseline', zorder=5)
+    plt.colorbar(im8, ax=ax8, label='Kiwi at t=200')
+    ax8.set_xlabel('α (predation rate)', fontsize=10)
+    ax8.set_ylabel('β (conversion efficiency)', fontsize=10)
+    ax8.set_title(f'Kiwi population — 2D (α, β)\n(white dashed = K={K0} boundary)', fontsize=10)
+    ax8.legend(fontsize=8)
+
+    # Recovery/extinction regime map
+    regime_ab = np.where(res['K_grid'] >= K0, 1.0, 0.0)
+    regime_ab[np.isnan(res['K_grid'])] = np.nan
+    ax9.contourf(A_mesh, B_mesh, regime_ab, levels=[-0.5, 0.5, 1.5],
+                 colors=['#d62728', '#2ca02c'], alpha=0.6)
+    ax9.contour(A_mesh, B_mesh, res['K_grid'], levels=[K0],
+                colors='black', linewidths=2)
+    ax9.axvline(ALPHA_BASE, color='white', ls='--', lw=1.5)
+    ax9.axhline(BETA_BASE,  color='white', ls=':',  lw=1.5)
+    ax9.plot(ALPHA_BASE, BETA_BASE, 'w*', ms=16, zorder=5, label='Baseline')
+    ax9.legend(handles=[
+        Patch(facecolor='#d62728', alpha=0.6, label='Kiwi extinct (K<K0)'),
+        Patch(facecolor='#2ca02c', alpha=0.6, label='Kiwi recover (K≥K0)'),
+        plt.Line2D([0],[0], color='black', lw=2, label='K=K0 boundary'),
+        plt.Line2D([0],[0], marker='*', color='w', markerfacecolor='white',
+                   ms=12, lw=0, label='Baseline'),
+    ], fontsize=8, loc='upper right')
+    ax9.set_xlabel('α (predation rate)', fontsize=10)
+    ax9.set_ylabel('β (conversion efficiency)', fontsize=10)
+    ax9.set_title(f'Recovery regime map (α, β)\n({hr_label})', fontsize=10)
+    ax9.grid(True, alpha=0.2)
+
+    slug = hr_label.replace(' ','_').replace('=','').replace('(','').replace(')','').replace('.','')
+    fname = f'/mnt/user-data/outputs/sensitivity_alpha_beta_{slug}.png'
+    fig.suptitle(f'Sensitivity to α and β: {hr_label}\n'
+                 f'intervention yr={INTERVENTION_YR}, t={T_MAX}, '
+                 f'δ={delta}, r_stoat={R_STOAT}, PI_BAR_ESS={PI_BAR_ESS:.4f}',
+                 fontsize=12, fontweight='bold')
+    plt.savefig(fname, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Saved: {fname}")
+
+print("\nAll sensitivity plots saved (δ/r_stoat and α/β).")
