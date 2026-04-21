@@ -68,31 +68,19 @@ INTERVENTION_PAYOFFS = BASE_PAYOFFS + np.array([[0.117, 0.275],[0.062, 0.02]])
 
 def simulate_egt(it, hr, t_max=200):
     """
-    Standalone EGT: replicator dynamics only.
-    Pre-intervention: base payoffs (predation pressure present).
-    Post-intervention: shifted payoffs (reduced predation pressure).
-    Note: no population dynamics — strategy evolves in isolation.
+    Standalone EGT: replicator dynamics with BASE_PAYOFFS only.
+    Harvest rate and intervention year have NO effect — the standalone EGT
+    has no population dynamics and no coupling to stoat density. All scenarios
+    converge to the same analytical ESS x*=0.6875 regardless of hr or it.
+    The intervention year affects only how quickly x reaches x* (starting
+    from X0=0.30), not the endpoint.
+    This is intentional: it demonstrates that EGT alone cannot produce
+    scenario-dependent outcomes — that capability requires CEPPM coupling.
     """
     t_span = np.linspace(0, t_max, 2000)
-    t_pre  = t_span[t_span <= it]
-    t_post = t_span[t_span >  it]
-
-    sol_pre = odeint(egt_replicator, X0, t_pre,
-                     args=(BASE_PAYOFFS,), tfirst=False)
-    x_at_it = float(sol_pre[-1][0]) if len(sol_pre) > 0 else X0
-
-    if hr > 0 and len(t_post) > 0:
-        # Payoff shift scaled by harvest rate — larger h = bigger payoff improvement
-        pm_post = BASE_PAYOFFS + np.array([[0.117, 0.275],[0.062, 0.02]]) * (hr / 0.4)
-        sol_post = odeint(egt_replicator, x_at_it, t_post - it,
-                          args=(pm_post,), tfirst=False)
-        t_all = np.concatenate([t_pre, t_post])
-        x_all = np.concatenate([sol_pre.flatten(), sol_post.flatten()])
-    else:
-        t_all = t_pre
-        x_all = sol_pre.flatten()
-
-    return t_all, x_all
+    sol = odeint(egt_replicator, X0, t_span,
+                 args=(BASE_PAYOFFS,), tfirst=False)
+    return t_span, sol.flatten()
 
 # ============================================================================
 # PART 2: STANDALONE L-V MODEL
