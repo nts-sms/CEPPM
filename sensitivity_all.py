@@ -659,3 +659,185 @@ plt.savefig(lv_fname, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\nSaved: {lv_fname}")
 print("\nAll sensitivity plots saved (δ/r_stoat, α/β, and L-V parameters).")
+
+# ============================================================================
+# PART 4: INTERVENTION TIMING SENSITIVITY
+# Tests how sensitive kiwi outcomes are to the year in which predator control
+# begins, at two harvest rates:
+#   h=0.16 — approximately the effective kiwi recovery threshold
+#   h=0.20 — Scenario 1b (above effective threshold, below h_crit)
+# Sweep covers intervention years 0–30 at t_max=200.
+# Key finding: at h=0.16 timing is irrelevant (harvest rate insufficient
+# for meaningful recovery regardless of when it starts); at h=0.20 timing
+# matters — earlier is better — with K dropping below K0 if intervention
+# is delayed beyond approximately year 22.
+# ============================================================================
+
+print("\n" + "="*60)
+print("PART 4: Intervention Timing Sensitivity")
+print("="*60)
+
+IT_RANGE  = list(range(0, 31))
+SNAPSHOTS_T = [50, 100, 200]
+TIMING_CONFIGS = [
+    (0.16, 'h=0.16 (≈ effective recovery threshold)', '#9467bd'),
+    (0.20, 'h=0.20 (Scenario 1b)',                    '#ff7f0e'),
+]
+
+def simulate_timing(it, hr, t_max=T_MAX):
+    """Simulate CEPPM with given intervention year and harvest rate."""
+    y0 = [X0, K0, S0]
+    if it == 0:
+        t_eval = np.linspace(0, t_max, 2000)
+        sol = solve_ivp(lambda t,y: hybrid_system_timing(t, y, hr),
+                        [0, t_max], y0, t_eval=t_eval,
+                        method='RK45', rtol=1e-8, atol=1e-10)
+        return sol.t, sol.y[0], sol.y[1], sol.y[2]
+    t1 = np.linspace(0, it, max(400, it*20))
+    t2 = np.linspace(it, t_max, max(800, (t_max-it)*10))
+    s1 = solve_ivp(lambda t,y: hybrid_system_timing(t, y, 0),
+                   [0, it], y0, t_eval=t1,
+                   method='RK45', rtol=1e-8, atol=1e-10)
+    s2 = solve_ivp(lambda t,y: hybrid_system_timing(t, y, hr),
+                   [it, t_max],
+                   [s1.y[0][-1], s1.y[1][-1], s1.y[2][-1]],
+                   t_eval=t2, method='RK45', rtol=1e-8, atol=1e-10)
+    return (np.concatenate([s1.t,    s2.t]),
+            np.concatenate([s1.y[0], s2.y[0]]),
+            np.concatenate([s1.y[1], s2.y[1]]),
+            np.concatenate([s1.y[2], s2.y[2]]))
+
+def hybrid_system_timing(t, y, hr=0):
+    """Identical to main hybrid system — separate function for clarity."""
+    x, K, S = y
+    x = np.clip(x, 0.01, 0.99); K = max(K, 0); S = max(S, 0)
+    sig = 1 / (1 + np.exp(-3.0*(S - 1.0)))
+    dp = np.array([
+        [max(BASE_PAYOFFS[0,0]-0.40*sig, 0.01), max(BASE_PAYOFFS[0,1]-0.40*sig, 0.01)],
+        [max(BASE_PAYOFFS[1,0]-0.15*sig, 0.01), max(BASE_PAYOFFS[1,1]-0.15*sig, 0.01)]
+    ])
+    pA  = x*dp[0,0]+(1-x)*dp[0,1]; pB=x*dp[1,0]+(1-x)*dp[1,1]
+    pav = x*pA+(1-x)*pB
+    dxdt = x*(pA-pav) if 0 < x < 1 else 0
+    r_eff  = r*(avg_payoff_base(x)/PI_BAR_ESS)
+    a_eff  = alpha*(x*1.3+(1-x)*0.7)
+    f_K    = (a_eff*K)/(1+a_eff*h_handling*K)
+    dKdt   = r_eff*K*(1-K/K_MAX)-f_K*S
+    nat    = R_STOAT*S*(1-S/S_MAX)+beta*f_K*S-delta*S
+    nkg    = R_STOAT*S*(1-S/S_MAX)-delta*S
+    S_floor_t = S_MAX*(1-delta/R_STOAT)
+    if S <= S_floor_t and nkg < 0: nat = max(nat, 0.0)
+    dSdt   = nat - hr*S
+    return [dxdt, dKdt, dSdt]
+
+# ── Run sweeps ────────────────────────────────────────────────────────────────
+timing_results = {}
+for hr, hrlabel, hrcol in TIMING_CONFIGS:
+    it_K = {t: [] for t in SNAPSHOTS_T}
+    K_finals = []; S_finals = []; x_finals = []
+    for it in IT_RANGE:
+        t_arr, x_arr, K_arr, S_arr = simulate_timing(it, hr)
+        for tq in SNAPSHOTS_T:
+            it_K[tq].append(float(np.interp(tq, t_arr, K_arr)))
+        K_finals.append(float(K_arr[-1]))
+        S_finals.append(float(S_arr[-1]))
+        x_finals.append(float(x_arr[-1])*100)
+    timing_results[hr] = {
+        'K': it_K, 'K_final': K_finals,
+        'S_final': S_finals, 'x_final': x_finals,
+        'label': hrlabel, 'color': hrcol
+    }
+    print(f"  {hrlabel}: done")
+
+# ── Print table ───────────────────────────────────────────────────────────────
+print(f"\n{'='*80}")
+print(f"INTERVENTION TIMING SENSITIVITY TABLE — K at t=50, 100, 200")
+print(f"{'='*80}")
+for hr, hrlabel, hrcol in TIMING_CONFIGS:
+    res = timing_results[hr]
+    print(f"\n{hrlabel}")
+    print(f"{'Int. yr':>8} {'K@t=50':>10} {'K@t=100':>10} {'K@t=200':>10} "
+          f"{'S@t=200':>10} {'x%@t=200':>10}")
+    print("-"*62)
+    for i, it in enumerate(IT_RANGE):
+        print(f"  {it:>6}   {res['K'][50][i]:>10.1f}  {res['K'][100][i]:>10.1f}  "
+              f"{res['K_final'][i]:>10.1f}  {res['S_final'][i]:>10.3f}  "
+              f"{res['x_final'][i]:>9.1f}%")
+
+# ── Plots ─────────────────────────────────────────────────────────────────────
+fig, axes = plt.subplots(2, 3, figsize=(17, 11))
+fig.suptitle(
+    'Sensitivity to Intervention Timing\n'
+    'h=0.16 (≈ effective recovery threshold) vs h=0.20 (Scenario 1b)',
+    fontsize=12, fontweight='bold'
+)
+
+snapshot_cols = ['#1f77b4', '#2ca02c', '#d62728']
+
+# Row 0: K vs intervention year at t=50, 100, 200
+for col, (tq, scol) in enumerate(zip(SNAPSHOTS_T, snapshot_cols)):
+    ax = axes[0, col]
+    for hr, hrlabel, hrcol in TIMING_CONFIGS:
+        res = timing_results[hr]
+        ax.plot(IT_RANGE, res['K'][tq], color=hrcol, lw=2.5, label=hrlabel)
+    ax.axhline(K_MAX, color='green', ls=':', lw=1.2, alpha=0.5, label=f'K_max={K_MAX}')
+    ax.axhline(K0,    color='gray',  ls=':', lw=1.2, alpha=0.5, label=f'K0={K0}')
+    ax.axhspan(0, 5, alpha=0.06, color='red', label='Extinction zone')
+    ax.set_xlabel('Intervention year', fontsize=11)
+    ax.set_ylabel(f'Kiwi K at t={tq}', fontsize=11)
+    ax.set_title(f'Kiwi population at t={tq}', fontsize=12)
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+    ax.set_xlim(0, 30); ax.set_ylim(-5, K_MAX+10)
+
+# Row 1, col 0: Stoat at t=200
+ax = axes[1, 0]
+for hr, hrlabel, hrcol in TIMING_CONFIGS:
+    res = timing_results[hr]
+    ax.plot(IT_RANGE, res['S_final'], color=hrcol, lw=2.5, label=hrlabel)
+S_nk = S_MAX*(1-delta/R_STOAT)
+ax.axhline(S_nk, color='darkred', ls='--', lw=1.5, alpha=0.7, label=f'S_nk={S_nk:.2f}')
+ax.set_xlabel('Intervention year', fontsize=11)
+ax.set_ylabel('Stoat S at t=200', fontsize=11)
+ax.set_title('Stoat population at t=200', fontsize=12)
+ax.legend(fontsize=8); ax.grid(True, alpha=0.3); ax.set_xlim(0, 30)
+
+# Row 1, col 1: Open foraging at t=200
+ax = axes[1, 1]
+for hr, hrlabel, hrcol in TIMING_CONFIGS:
+    res = timing_results[hr]
+    ax.plot(IT_RANGE, res['x_final'], color=hrcol, lw=2.5, label=hrlabel)
+ax.axhline(66.3, color='purple', ls=':', lw=1.2, alpha=0.6, label='Simulated ESS 66.3%')
+ax.axhline(19.1, color='gray',   ls=':', lw=1.2, alpha=0.6, label='Unmanaged 19.1%')
+ax.set_xlabel('Intervention year', fontsize=11)
+ax.set_ylabel('Open foraging % at t=200', fontsize=11)
+ax.set_title('Open foraging proportion at t=200', fontsize=12)
+ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+ax.set_xlim(0, 30); ax.set_ylim(0, 100)
+
+# Row 1, col 2: Critical timing — K@200 vs intervention year with K0 crossing
+ax = axes[1, 2]
+for hr, hrlabel, hrcol in TIMING_CONFIGS:
+    res = timing_results[hr]
+    ax.plot(IT_RANGE, res['K_final'], color=hrcol, lw=2.5, label=hrlabel)
+ax.axhline(K_MAX, color='green', ls=':', lw=1.2, alpha=0.5, label=f'K_max={K_MAX}')
+ax.axhline(K0,    color='gray',  ls='--', lw=1.5, alpha=0.7, label=f'K0={K0}')
+ax.axhspan(0, K0, alpha=0.06, color='red', label='Net population loss zone')
+for hr, hrlabel, hrcol in TIMING_CONFIGS:
+    res = timing_results[hr]
+    for i in range(len(IT_RANGE)-1):
+        if res['K_final'][i] >= K0 > res['K_final'][i+1]:
+            ax.axvline(IT_RANGE[i], color=hrcol, ls='--', lw=1.5, alpha=0.7,
+                       label=f'Critical yr ≈ {IT_RANGE[i]} ({hrlabel[:6]})')
+            break
+ax.set_xlabel('Intervention year', fontsize=11)
+ax.set_ylabel('Kiwi K at t=200', fontsize=11)
+ax.set_title('Critical intervention timing\n(below K0 = net population loss)', fontsize=11)
+ax.legend(fontsize=7.5); ax.grid(True, alpha=0.3)
+ax.set_xlim(0, 30); ax.set_ylim(-5, K_MAX+10)
+
+plt.tight_layout()
+timing_fname = '/mnt/user-data/outputs/sensitivity_intervention_timing.png'
+plt.savefig(timing_fname, dpi=150, bbox_inches='tight')
+plt.close()
+print(f"\nSaved: {timing_fname}")
+print("\nAll sensitivity plots saved (δ/r_stoat, α/β, L-V parameters, intervention timing).")
