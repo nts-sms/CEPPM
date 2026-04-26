@@ -490,3 +490,172 @@ for hr_label, res in ab_results.items():
     print(f"Saved: {fname}")
 
 print("\nAll sensitivity plots saved (δ/r_stoat and α/β).")
+
+# ============================================================================
+# PART 3: L-V PARAMETER SENSITIVITY (r, alpha, beta, delta)
+# Varies each of the four core L-V parameters across its plausible empirical
+# range using CEPPM simulation at three harvest rates (h=0.15, 0.25, 0.40)
+# with intervention at year 20. Elasticity computed via finite difference
+# at the baseline parameter value.
+# Replaces earlier nullcline-based analysis which was derived under S_MAX=5
+# and is inconsistent with the current S_MAX=8 parameterisation.
+# ============================================================================
+
+print("\n" + "="*60)
+print("PART 3: L-V Parameter Sensitivity (r, α, β, δ)")
+print("="*60)
+
+LV_PARAMS = [
+    ('r',     np.linspace(0.02, 0.20, 30), r,          'r (kiwi growth rate)',       'Kiwi growth rate r',        '#2ca02c'),
+    ('alpha', np.linspace(0.01, 0.10, 30), alpha,       'α (predation rate)',          'Predation rate α',          '#d62728'),
+    ('beta',  np.linspace(0.005,0.05, 30), beta,        'β (conversion efficiency)',   'Conversion efficiency β',   '#ff7f0e'),
+    ('delta', np.linspace(0.15, 0.55, 30), delta,       'δ (stoat natural mortality)', 'Stoat natural mortality δ', '#1f77b4'),
+]
+LV_HARVEST = [
+    (0.15, 'h=0.15 (failed zone)', '#d62728'),
+    (0.25, 'h=0.25 (= h_crit)',    '#ff7f0e'),
+    (0.40, 'h=0.40 (above h_crit)','#2ca02c'),
+]
+LV_IT   = 20
+LV_TMAX = T_MAX
+
+def simulate_lv_param(r_p, alpha_p, beta_p, delta_p, hr, it, t_max):
+    """Simulate CEPPM with variable L-V parameters and return K at t_max."""
+    S_floor_p = S_MAX*(1 - delta_p/R_STOAT) if R_STOAT > delta_p else 0.0
+    def system(t, y):
+        x, K, S = y
+        x = np.clip(x, 0.01, 0.99); K = max(K, 0); S = max(S, 0)
+        sig = 1/(1 + np.exp(-3.0*(S - 1.0)))
+        dp = np.array([
+            [max(BASE_PAYOFFS[0,0]-0.40*sig,0.01), max(BASE_PAYOFFS[0,1]-0.40*sig,0.01)],
+            [max(BASE_PAYOFFS[1,0]-0.15*sig,0.01), max(BASE_PAYOFFS[1,1]-0.15*sig,0.01)]
+        ])
+        pA  = x*dp[0,0]+(1-x)*dp[0,1]; pB=x*dp[1,0]+(1-x)*dp[1,1]
+        pav = x*pA+(1-x)*pB
+        dxdt = x*(pA-pav) if 0<x<1 else 0
+        r_eff  = r_p*(avg_payoff_base(x)/PI_BAR_ESS)
+        a_eff  = alpha_p*(x*1.3+(1-x)*0.7)
+        f_K    = (a_eff*K)/(1+a_eff*h_handling*K)
+        dKdt   = r_eff*K*(1-K/K_MAX)-f_K*S
+        nat    = R_STOAT*S*(1-S/S_MAX)+beta_p*f_K*S-delta_p*S
+        nkg    = R_STOAT*S*(1-S/S_MAX)-delta_p*S
+        if S <= S_floor_p and nkg < 0: nat = max(nat, 0.0)
+        dSdt   = nat - hr*S
+        return [dxdt, dKdt, dSdt]
+
+    y0 = [X0, K0, S0]
+    t1 = np.linspace(0, it, max(200, it*20))
+    t2 = np.linspace(it, t_max, max(800, (t_max-it)*10))
+    try:
+        s1 = solve_ivp(lambda t,y: system(t,y), [0,it], y0,
+                       t_eval=t1, method='RK45', rtol=1e-8, atol=1e-10)
+        # Switch to harvest rate after intervention
+        def sys_hr(t, y):
+            x,K,S = y; x=np.clip(x,0.01,0.99); K=max(K,0); S=max(S,0)
+            sig=1/(1+np.exp(-3.0*(S-1.0)))
+            dp=np.array([[max(BASE_PAYOFFS[0,0]-0.40*sig,0.01),max(BASE_PAYOFFS[0,1]-0.40*sig,0.01)],
+                         [max(BASE_PAYOFFS[1,0]-0.15*sig,0.01),max(BASE_PAYOFFS[1,1]-0.15*sig,0.01)]])
+            pA=x*dp[0,0]+(1-x)*dp[0,1]; pB=x*dp[1,0]+(1-x)*dp[1,1]
+            pav=x*pA+(1-x)*pB; dxdt=x*(pA-pav) if 0<x<1 else 0
+            r_eff=r_p*(avg_payoff_base(x)/PI_BAR_ESS); a_eff=alpha_p*(x*1.3+(1-x)*0.7)
+            f_K=(a_eff*K)/(1+a_eff*h_handling*K); dKdt=r_eff*K*(1-K/K_MAX)-f_K*S
+            nat=R_STOAT*S*(1-S/S_MAX)+beta_p*f_K*S-delta_p*S
+            nkg=R_STOAT*S*(1-S/S_MAX)-delta_p*S
+            if S<=S_floor_p and nkg<0: nat=max(nat,0.0)
+            return [dxdt,dKdt,nat-hr*S]
+        s2 = solve_ivp(sys_hr, [it, t_max],
+                       [s1.y[0][-1], s1.y[1][-1], s1.y[2][-1]],
+                       t_eval=t2, method='RK45', rtol=1e-8, atol=1e-10)
+        return float(s2.y[1][-1])
+    except:
+        return np.nan
+
+# ── Run sweeps ────────────────────────────────────────────────────────────────
+lv_results      = {}
+lv_elasticities = {}
+
+for hr, hrlabel, hrcol in LV_HARVEST:
+    lv_results[hr]      = {}
+    lv_elasticities[hr] = {}
+    for pname, prange, pbase, xlabel, title, col in LV_PARAMS:
+        K_vals = []
+        for v in prange:
+            rp = v     if pname=='r'     else r
+            ap = v     if pname=='alpha' else alpha
+            bp = v     if pname=='beta'  else beta
+            dp = v     if pname=='delta' else delta
+            K_vals.append(simulate_lv_param(rp, ap, bp, dp, hr, LV_IT, LV_TMAX))
+        lv_results[hr][pname] = K_vals
+
+        bi = np.argmin(np.abs(prange - pbase))
+        if 0 < bi < len(K_vals)-1:
+            k_lo, k_hi, k_c = K_vals[bi-1], K_vals[bi+1], K_vals[bi]
+            if not any(np.isnan(v) for v in [k_lo,k_hi,k_c]) and k_c and k_c>0:
+                e=((k_hi-k_lo)/k_c)/((prange[bi+1]-prange[bi-1])/pbase)
+                lv_elasticities[hr][pname] = e
+            else:
+                lv_elasticities[hr][pname] = None
+        else:
+            lv_elasticities[hr][pname] = None
+    print(f"  L-V sweep h={hr}: done")
+
+# ── Print updated table ────────────────────────────────────────────────────────
+print(f"\n{'='*75}")
+print(f"L-V PARAMETER SENSITIVITY TABLE — intervention yr={LV_IT}, t={LV_TMAX}")
+print(f"{'='*75}")
+print(f"{'Param':<8} {'Range':<14} {'h=0.15':>10} {'h=0.25':>10} {'h=0.40':>10}")
+print("-"*55)
+ranges_lv = {'r':'0.02–0.20','alpha':'0.01–0.10','beta':'0.005–0.050','delta':'0.15–0.55'}
+for pname,_,_,_,_,_ in LV_PARAMS:
+    row = f"  {pname:<6}  {ranges_lv[pname]:<14}"
+    for hr,_,_ in LV_HARVEST:
+        e = lv_elasticities[hr][pname]
+        row += f"  {e:>+8.3f}" if e is not None else f"  {'undef.':>8}"
+    print(row)
+
+# ── Summary plot: 3 rows (harvest rates) × 4 cols (parameters) ───────────────
+fig, axes = plt.subplots(3, 4, figsize=(20, 14))
+fig.suptitle(
+    f'L-V Parameter Sensitivity — Kiwi population K at t={LV_TMAX}\n'
+    f'CEPPM simulation, intervention yr={LV_IT}  |  '
+    f'Rows = harvest rate  |  Columns = parameter varied',
+    fontsize=12, fontweight='bold'
+)
+
+for row, (hr, hrlabel, hrcol) in enumerate(LV_HARVEST):
+    for col, (pname, prange, pbase, xlabel, title, pcol) in enumerate(LV_PARAMS):
+        ax      = axes[row, col]
+        K_vals  = lv_results[hr][pname]
+
+        ax.plot(prange, K_vals, color=hrcol, lw=2.5, zorder=3)
+        ax.axvline(pbase, color='black', ls='--', lw=1.5, alpha=0.8,
+                   label=f'Baseline={pbase}')
+        ax.axhline(K_MAX, color='green', ls=':', lw=1.2, alpha=0.5,
+                   label=f'K_max={K_MAX}')
+        ax.axhline(K0, color='gray', ls=':', lw=1.2, alpha=0.5,
+                   label=f'K0={K0}')
+        ax.axhspan(0, 5, alpha=0.06, color='red')
+
+        e    = lv_elasticities[hr][pname]
+        estr = f'ε={e:+.2f}' if e is not None else 'ε=undef.'
+        ax.text(0.97, 0.97, estr, transform=ax.transAxes, fontsize=9,
+                ha='right', va='top',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                          edgecolor='gray', alpha=0.85))
+
+        if col == 0:
+            ax.set_ylabel(f'{hrlabel}\nKiwi K at t={LV_TMAX}', fontsize=9)
+        if row == 0:
+            ax.set_title(title, fontsize=10)
+        ax.set_xlabel(xlabel, fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(-5, K_MAX+10)
+        if row == 0 and col == 0:
+            ax.legend(fontsize=7)
+
+plt.tight_layout()
+lv_fname = '/mnt/user-data/outputs/sensitivity_lv_parameters.png'
+plt.savefig(lv_fname, dpi=150, bbox_inches='tight')
+plt.close()
+print(f"\nSaved: {lv_fname}")
+print("\nAll sensitivity plots saved (δ/r_stoat, α/β, and L-V parameters).")
