@@ -18,10 +18,8 @@ This model was implemented in Python using algorithms designed by the author and
 2. **Install dependencies**: 
    `pip install numpy scipy matplotlib pandas seaborn`
 3. **Run the simulation**:
-   - Open and run `CEPPM_2026.ipynb` in a CoLab environment to generate the plots shown in the paper.
-   - Open and run `run_scenarios.py` to reproduce the model results for the control and 4 harvest regime scenarios
    - Open and run `sensitivity_all.py` to reproduce the sensitivity analyses as follows: Part 1 — δ and r_stoat sweeps; Part 2 — α and β sweeps; Part 3 — L-V parameter sensitivity (r, α, β, δ); Part 4 — Intervention timing sensitivity for years 0–30
-   - Alternatively, open and run `kiwi_conservation_analysis.py` to reproduce all model results - Base model visualisations, all five conservation scenarios,  user-configured harvest rate simulation, Hybrid model baseline and managed comparison, Foraging vs harvest rate sweep, sensitivity analysis and field data analysis
+   - Open and run `kiwi_conservation_analysis.py` to reproduce all model results - Base model visualisations, all five conservation scenarios,  user-configured harvest rate simulation, Hybrid model baseline and managed comparison, Foraging vs harvest rate sweep
 
 
 
