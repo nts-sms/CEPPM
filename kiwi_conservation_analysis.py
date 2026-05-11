@@ -128,14 +128,20 @@ except (ValueError, EOFError):
 #            (sanctuary-level operations; Germano et al. 2015)
 #
 # FLOOR AND ERADICATION THRESHOLDS (with current parameters):
-#   S_floor = S_max*(1 - delta/r_stoat) = 8*(1-0.35/0.60) = 3.333
-#   h_crit = r_stoat - delta = 0.60 - 0.35 = 0.25
-#     h < 0.25 : stoats grow toward S_floor; kiwi decline toward extinction
-#     h > 0.25 : stoats suppressed below floor; kiwi can recover toward K_max
-#   h_erad = r_stoat = 0.60
-#     h > 0.60 : eradication possible — harvest exceeds stoat growth capacity
-#                from ALL prey sources; stoats driven toward zero
-#                (consistent with Predator Free 2050 goal)
+#   S_floor    = S_max*(1 - delta/r_stoat) = 8*(1-0.35/0.60) = 3.333
+#   h_crit     = r_stoat - delta = 0.60 - 0.35 = 0.25
+#     h < 0.25 : stoats sustained by non-kiwi prey at S*(h) > 0
+#     h = 0.25 : non-kiwi stoat equilibrium collapses to zero; stoats persist
+#                through kiwi predation bonus β·f(K*)·S as kiwi recover
+#   h_erad     = r_stoat - delta + β·f(K_max) ≈ 0.32
+#     h < 0.32 : stoats persist at positive coexistence equilibrium through
+#                kiwi predation bonus (even above h_crit)
+#     h ≥ 0.32 : stoat nullcline non-positive across full kiwi density range;
+#                stoats driven to zero regardless of kiwi abundance
+#   h_erad_theoretical = r_stoat = 0.60
+#     theoretical upper bound — harvest exceeds total stoat intrinsic growth
+#     capacity; consistent with Predator Free 2050 goal under worst-case
+#     mast conditions
 #   NOTE: with delta=0.35 (natural mortality, annual survival ~70%), there is
 #   NO stable coexistence equilibrium without management — kiwi decline toward
 #   local extinction. This correctly reproduces observed field reality
@@ -479,19 +485,33 @@ class KiwiLotkaVolterraModel:
         """
         Numerical equilibrium finder (original formulation restored).
 
-        Three possible outcomes:
-        ─────────────────────────
-        1. COEXISTENCE equilibrium (K>0, S_floor<S<S_max): found numerically.
+        Four possible outcomes based on nullcline analysis:
+        ────────────────────────────────────────────────
+        1. COEXISTENCE equilibrium (K>0, S>0): found numerically where both
+           nullclines intersect. Exists in partial recovery zone (h < h_crit)
+           and kiwi bonus zone (h_crit < h < h_erad).
 
-        2. FLOOR-SUPPRESSED state (K→K_max, S=S_floor): harvest > h_crit
-           suppresses stoats to their non-kiwi prey floor; kiwi recover.
-           S_floor = S_max*(1 - delta/r_stoat) = 12*(1-0.35/0.60) = 5.0
+        2. KIWI BONUS ZONE (h_crit < h < h_erad ≈ 0.32):
+           Non-kiwi stoat equilibrium S*(h) < 0 but stoats persist at a
+           reduced positive equilibrium through the kiwi predation bonus
+           β·f(K)·S as kiwi recover under predator control. The numerical
+           solver above should find this intersection; this fallback applies
+           if it does not converge.
            h_crit  = r_stoat - delta = 0.25
+           h_erad  = r_stoat - delta + β·f(K_max) ≈ 0.32
 
-        3. ERADICATION state (K→K_max, S→0): harvest >= r_stoat = 0.60.
+        3. FULL SUPPRESSION (h_erad ≤ h < r_stoat): stoat nullcline
+           non-positive across full kiwi density range; stoats driven to
+           zero; kiwi recover to K_max.
+
+        4. THEORETICAL UPPER BOUND (h ≥ r_stoat = 0.60): harvest exceeds
+           total stoat intrinsic growth capacity; PF2050 scenario.
         """
-        S_floor = self.S_max * (1 - self.delta / self.r_stoat)
-        h_crit  = self.r_stoat - self.delta
+        S_floor  = self.S_max * (1 - self.delta / self.r_stoat)
+        h_crit   = self.r_stoat - self.delta
+        f_Kmax   = (self.alpha * self.K_max
+                    / (1 + self.alpha * self.h * self.K_max))
+        h_erad   = h_crit + self.beta * f_Kmax   # ≈ 0.320
 
         def equations(vars):
             K, S = vars
@@ -505,15 +525,18 @@ class KiwiLotkaVolterraModel:
                     - harvest_rate * S)
             return [eq1, eq2]
 
+        # Extend initial guesses to cover kiwi bonus zone (S near zero, K large)
         best = None
         best_residual = np.inf
-        for K_g in [10, 20, 30, 50, 80, 100, 130]:
-            for S_g in [0.3, 0.5, 1.0, 2.0, 3.0, 4.0]:
+        K_guesses = [10, 20, 30, 50, 80, 100, 120, 140]
+        S_guesses = [0.05, 0.1, 0.3, 0.5, 1.0, 2.0, 3.0, 4.0]
+        for K_g in K_guesses:
+            for S_g in S_guesses:
                 try:
                     sol = fsolve(equations, [K_g, S_g], full_output=True)
                     K_eq, S_eq = sol[0]
                     residual = max(abs(x) for x in equations(sol[0]))
-                    if (K_eq > 1 and S_eq > S_floor * 0.5
+                    if (K_eq > 1 and S_eq > 1e-4
                             and K_eq < self.K_max
                             and residual < 1e-6):
                         if residual < best_residual:
@@ -525,11 +548,20 @@ class KiwiLotkaVolterraModel:
         if best is not None:
             return best[0], best[1]
 
-        # No coexistence found — determine regime
-        if harvest_rate >= self.r_stoat:
+        # No coexistence found — determine regime from nullcline analysis
+        if harvest_rate >= h_erad:
+            # Full suppression or theoretical upper bound —
+            # stoat nullcline non-positive everywhere; stoats eradicated
             return self.K_max, 0.0
         elif harvest_rate > h_crit:
-            return self.K_max, S_floor
+            # Kiwi bonus zone — numerical solver failed to find intersection;
+            # return approximate kiwi bonus equilibrium as fallback
+            # (S small positive, K large but < K_max)
+            if not suppress_warnings:
+                print(f"  NOTE: kiwi bonus zone (h={harvest_rate:.2f}, "
+                      f"h_crit={h_crit:.2f}, h_erad={h_erad:.3f}) — "
+                      f"numerical solver did not converge; returning approximation.")
+            return self.K_max * 0.95, 0.05
         else:
             if not suppress_warnings:
                 print(f"  NOTE: no coexistence equilibrium (h={harvest_rate:.2f}, "
@@ -1160,43 +1192,63 @@ def analyze_conservation_scenarios(hybrid_model):
     print(f"  Simulation: {T_MAX} years, intervention at year {INTERVENTION_TIME}")
     print(f"  All scenarios use full EGT-L-V coupling via dynamic payoff feedback")
 
-    # Harvest rates grounded in literature:
-    # 0.00 = no intervention baseline
-    # 0.20 = Murchison low-intensity trapping (Tansell et al. via PF NZ 2024)
-    #        h < h_crit=0.25 → insufficient; kiwi continue declining
-    # 0.40 = DOC aerial 1080 (National Predator Control Programme 2024)
-    # 0.60 = Intensive sanctuary programme (Germano et al. 2015) = h_erad
+    # Scenario definitions — updated regime structure based on nullcline analysis:
+    #   h_crit = 0.25 : non-kiwi stoat equilibrium collapses
+    #   h_erad ≈ 0.32 : true stoat eradication (stoats sustained by kiwi bonus
+    #                   between h_crit and h_erad)
+    #   h_erad_theo = 0.60 : theoretical upper bound (PF2050)
     scenarios = {
         'baseline': {
             'description': 'No intervention (h=0)',
             'harvest_rate': 0,
+            'int_yr_override': None,
         },
-        'low_trapping': {
-            'description': f'Low trapping — h=0.20 < h_crit=0.25 (insufficient)',
-            'harvest_rate': 0.2,
+        'scenario_1': {
+            'description': 'Scenario 1 — h=0.10, yr 20 (failed management)',
+            'harvest_rate': 0.10,
+            'int_yr_override': 20,
         },
-        'aerial_1080': {
-            'description': 'Aerial 1080 — h=0.40 (DOC NPC)',
-            'harvest_rate': 0.4,
+        'scenario_2a': {
+            'description': 'Scenario 2a — h=0.20, yr 20 (partial recovery, below h_crit)',
+            'harvest_rate': 0.20,
+            'int_yr_override': 20,
         },
-        'intensive': {
-            'description': 'Intensive sanctuary — h=0.60 = h_erad',
-            'harvest_rate': 0.6,
+        'scenario_2b': {
+            'description': 'Scenario 2b — h=0.25, yr 20 (h_crit; kiwi bonus sustains stoats)',
+            'harvest_rate': 0.25,
+            'int_yr_override': 20,
+        },
+        'scenario_2c': {
+            'description': 'Scenario 2c — h=0.30, yr 20 (kiwi bonus zone; h_crit < h < h_erad)',
+            'harvest_rate': 0.30,
+            'int_yr_override': 20,
+        },
+        'scenario_3a': {
+            'description': 'Scenario 3a — h=0.40, yr 10 (full suppression, above h_erad)',
+            'harvest_rate': 0.40,
+            'int_yr_override': 10,
+        },
+        'scenario_3b': {
+            'description': 'Scenario 3b — h=0.60, yr 2 (intensive/PF2050)',
+            'harvest_rate': 0.60,
+            'int_yr_override': 2,
         },
         'user_defined': {
             'description': f'User-defined — h={HARVEST_RATE:.2f}',
             'harvest_rate': HARVEST_RATE,
-        }
+            'int_yr_override': None,
+        },
     }
 
     results = {}
     for name, params in scenarios.items():
-        h = params['harvest_rate']
+        h      = params['harvest_rate']
+        int_yr = params.get('int_yr_override') or INTERVENTION_TIME
         print(f"\n{name.upper().replace('_', ' ')}: {params['description']}")
 
         t, x, K, S = hybrid_model.simulate_hybrid_dynamics(
             [X0, K0, S0], T_MAX,
-            intervention_time=INTERVENTION_TIME,
+            intervention_time=int_yr,
             harvest_rate=h
         )
 
@@ -1226,28 +1278,34 @@ def analyze_conservation_scenarios(hybrid_model):
 
 def _plot_scenario_comparison(results):
     scenarios  = list(results.keys())
-    # Short readable labels for each scenario key
     short_labels = {
-        'baseline':    'No\nintervention\n(h=0)',
-        'low_trapping': 'Low trapping\n(h=0.20)\ninsufficient',
-        'aerial_1080':  'Aerial 1080\n(h=0.40)',
-        'intensive':    'Intensive\n(h=0.60)',
+        'baseline':     'No\nintervention\n(h=0)',
+        'scenario_1':   'Scenario 1\n(h=0.10)\nFailed mgmt',
+        'scenario_2a':  'Scenario 2a\n(h=0.20)\nPartial rec.',
+        'scenario_2b':  'Scenario 2b\n(h=0.25)\nh_crit',
+        'scenario_2c':  'Scenario 2c\n(h=0.30)\nKiwi bonus',
+        'scenario_3a':  'Scenario 3a\n(h=0.40)\nFull suppr.',
+        'scenario_3b':  'Scenario 3b\n(h=0.60)\nPF2050',
         'user_defined': f'User defined\n(h={HARVEST_RATE:.2f})',
     }
-    labels  = [short_labels.get(s, s) for s in scenarios]
-    h_crit  = R_STOAT - 0.35
-    S_floor = S_MAX * (1 - 0.35 / R_STOAT)
+    labels   = [short_labels.get(s, s) for s in scenarios]
+    h_crit   = R_STOAT - 0.35
+    f_Kmax   = 0.044*150/(1+0.044*0.1*150)
+    h_erad   = h_crit + 0.0175*f_Kmax     # ≈ 0.320
+    S_floor  = S_MAX*(1-0.35/R_STOAT)
 
     fig, axes = plt.subplots(1, 3, figsize=(17, 7))
 
     def bar(ax, vals, color, ylabel, title, ylim=None, hlines=None):
         bars = ax.bar(range(len(scenarios)), vals, alpha=0.75, color=color)
         for s, b in zip(scenarios, bars):
-            if 0 < results[s]['harvest_rate'] < h_crit:
-                b.set_color('salmon')
-                b.set_alpha(0.6)
+            hr = results[s]['harvest_rate']
+            if 0 < hr <= h_crit:
+                b.set_color('salmon');     b.set_alpha(0.6)   # below h_crit
+            elif h_crit < hr <= h_erad:
+                b.set_color('gold');       b.set_alpha(0.7)   # kiwi bonus zone
         ax.set_xticks(range(len(scenarios)))
-        ax.set_xticklabels(labels, rotation=0, fontsize=9, ha='center',
+        ax.set_xticklabels(labels, rotation=0, fontsize=8, ha='center',
                            linespacing=1.3)
         ax.set_ylabel(ylabel, fontsize=11)
         ax.set_title(title, fontsize=12)
@@ -1282,9 +1340,9 @@ def _plot_scenario_comparison(results):
         hlines=[(S_floor, 'darkred', ':', f'S_floor={S_floor:.2f}')])
 
     fig.suptitle(
-        f'CEPPM Conservation Scenario Comparison\n'
-        f'(Hybrid model, T={T_MAX} yrs, intervention yr {INTERVENTION_TIME};'
-        f' salmon = h < h_crit={h_crit:.2f})',
+        f'CEPPM Conservation Scenario Comparison — Six Scenarios\n'
+        f'(T={T_MAX} yrs | salmon=below h_crit={h_crit:.2f} | '
+        f'gold=kiwi bonus zone h_crit to h_erad={h_erad:.3f})',
         fontsize=12, fontweight='bold'
     )
     plt.tight_layout()
@@ -1470,25 +1528,22 @@ def analyze_field_data():
 
 
 # ============================================================================
-# PART 7B: FORAGING STRATEGY VS HARVEST RATE — OPTION 1 SWEEP
+# PART 7B: FORAGING STRATEGY VS HARVEST RATE — FOUR-ZONE SWEEP
 # ============================================================================
 
 def plot_foraging_vs_harvest_rate(hybrid_model, intervention_year=5, t_max=None):
     """
-    Sweeps stoat harvest rate h from 0 to 0.72 and plots the equilibrium
-    open foraging proportion x at t_max as a continuous curve.
+    Sweeps stoat harvest rate h from 0 to 0.72 and plots equilibrium open
+    foraging proportion x at t_max as a continuous curve.
 
-    This figure demonstrates that the CEPPM produces scenario-dependent
-    strategy equilibria across the full harvest rate continuum — a result
-    the standalone EGT (which would give a flat horizontal line at x*=68.75%)
-    cannot produce.
-
-    Three management regime zones are shaded, corresponding to the
-    qualitative boundaries identified in the scenario analysis:
-      h < h_eff   (~0.16) : failed management zone
-      h_eff to h_crit     : partial recovery zone
-      h_crit to h_erad    : full suppression zone
-      h >= h_erad         : PF2050 / eradication zone
+    Updated with corrected four-zone regime shading based on nullcline analysis:
+      Zone 1 (red):    h < h_eff ≈ 0.16        — failed management
+      Zone 2 (orange): h_eff to h_crit = 0.25  — partial recovery
+      Zone 3 (yellow): h_crit to h_erad ≈ 0.32 — kiwi bonus zone
+                       stoats persist through kiwi predation bonus despite
+                       non-kiwi equilibrium collapse
+      Zone 4 (green):  h_erad to h_erad_theo   — full suppression
+      Zone 5 (blue):   h ≥ h_erad_theo = 0.60  — PF2050/eradication
 
     Parameters
     ----------
@@ -1500,114 +1555,325 @@ def plot_foraging_vs_harvest_rate(hybrid_model, intervention_year=5, t_max=None)
         t_max = T_MAX
 
     # Derived thresholds
-    H_CRIT  = R_STOAT - 0.35          # 0.25 — stoat suppression threshold
-    H_ERAD  = R_STOAT                  # 0.60 — eradication bound
-    H_EFF   = 0.16                     # effective kiwi recovery threshold
-    a, b    = hybrid_model.base_payoffs[0]
-    c, d    = hybrid_model.base_payoffs[1]
-    denom   = (a - b) + (d - c)
-    x_star  = (d - b) / denom if abs(denom) > 1e-10 else 0.5
-    x_star  = float(np.clip(x_star, 0.0, 1.0))   # analytical ESS = 0.6875
+    H_CRIT      = R_STOAT - 0.35
+    H_ERAD_THEO = R_STOAT
+    H_EFF       = 0.16
+    f_Kmax      = 0.044*150/(1+0.044*0.1*150)
+    H_ERAD_TRUE = H_CRIT + 0.0175*f_Kmax        # ≈ 0.320
+
+    a_p, b_p = hybrid_model.base_payoffs[0]
+    c_p, d_p = hybrid_model.base_payoffs[1]
+    denom    = (a_p-b_p)+(d_p-c_p)
+    x_star   = float(np.clip((d_p-b_p)/denom, 0, 1)) if abs(denom)>1e-10 else 0.5
 
     print("\n" + "="*70)
-    print("FORAGING STRATEGY vs HARVEST RATE SWEEP")
-    print(f"  Intervention year = {intervention_year},  t_max = {t_max}")
-    print(f"  Sweeping h from 0.00 to 0.72 in 120 steps ...")
+    print("FORAGING STRATEGY vs HARVEST RATE SWEEP (four-zone)")
+    print(f"  Intervention year={intervention_year},  t_max={t_max}")
+    print(f"  h_crit={H_CRIT:.3f}  h_erad={H_ERAD_TRUE:.4f}  "
+          f"h_erad_theo={H_ERAD_THEO:.2f}")
     print("="*70)
 
     h_vals = np.linspace(0.0, 0.72, 120)
     x_eq   = []
-
     for hv in h_vals:
         try:
-            t_sim, x_sim, _, _ = hybrid_model.simulate_hybrid_dynamics(
+            t_s, x_s, _, _ = hybrid_model.simulate_hybrid_dynamics(
                 [X0, K0, S0], t_max,
                 intervention_time=intervention_year,
                 harvest_rate=hv
             )
-            x_eq.append(float(x_sim[-1]) * 100)
+            x_eq.append(float(x_s[-1])*100)
         except Exception:
             x_eq.append(np.nan)
 
     print(f"  Sweep complete. x range: "
           f"{np.nanmin(x_eq):.1f}% – {np.nanmax(x_eq):.1f}%")
 
-    # ── Plot ─────────────────────────────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    # ── Plot ─────────────────────────────────────────────────────────────
+    import matplotlib.patches as mpatches
+    fig, ax = plt.subplots(figsize=(11, 6))
 
-    # Management regime shading
-    ax.axvspan(0,       H_EFF,  alpha=0.10, color='#d62728',
-               label='Failed management zone')
-    ax.axvspan(H_EFF,  H_CRIT, alpha=0.10, color='#ff7f0e',
-               label='Partial recovery zone')
-    ax.axvspan(H_CRIT, H_ERAD, alpha=0.10, color='#2ca02c',
-               label='Full suppression zone')
-    ax.axvspan(H_ERAD, 0.73,   alpha=0.10, color='#1f77b4',
-               label='PF2050 / eradication zone')
+    zones = [
+        (0,           H_EFF,       '#d62728', 0.12),
+        (H_EFF,       H_CRIT,      '#ff7f0e', 0.12),
+        (H_CRIT,      H_ERAD_TRUE, '#f5c518', 0.18),
+        (H_ERAD_TRUE, H_ERAD_THEO, '#2ca02c', 0.12),
+        (H_ERAD_THEO, 0.73,        '#1f77b4', 0.12),
+    ]
+    for x0z, x1z, col, alph in zones:
+        ax.axvspan(x0z, x1z, alpha=alph, color=col)
 
-    # Main CEPPM curve
-    ax.plot(h_vals, x_eq, color='#222222', linewidth=2.2, zorder=5,
+    for xv, col, lbl in [
+        (H_EFF,       '#d62728', f'h≈{H_EFF}  effective recovery threshold'),
+        (H_CRIT,      '#ff7f0e', f'h_crit={H_CRIT:.2f}  non-kiwi eq. collapses'),
+        (H_ERAD_TRUE, '#b8860b', f'h_erad≈{H_ERAD_TRUE:.3f}  true eradication threshold'),
+        (H_ERAD_THEO, '#1f77b4', f'h_erad_theo={H_ERAD_THEO:.2f}  PF2050 upper bound'),
+    ]:
+        ax.axvline(xv, color=col, linestyle='--', linewidth=1.5, alpha=0.9)
+
+    ax.axhline(x_star*100, color='#555', linestyle=':',  linewidth=1.2,
+               label=f'Analytical ESS x*={x_star*100:.2f}%')
+    ax.axhline(66.28,      color='#555', linestyle='-.', linewidth=1.2,
+               label='Simulated dynamic ESS ≈66.3%')
+    ax.axhline(X0*100,     color='black', linestyle=':', linewidth=1.0,
+               alpha=0.45, label=f'Initial x₀={X0*100:.0f}%')
+
+    ax.plot(h_vals, x_eq, color='#111', linewidth=2.4, zorder=6,
             label='CEPPM equilibrium x(h)')
 
-    # Threshold verticals
-    for xv, col, lbl in [
-        (H_EFF,  '#d62728', f'Effective recovery threshold  h≈{H_EFF}'),
-        (H_CRIT, '#ff7f0e', f'Stoat suppression threshold  h_crit={H_CRIT}'),
-        (H_ERAD, '#1f77b4', f'Eradication bound  h_erad={H_ERAD}'),
-    ]:
-        ax.axvline(xv, color=col, linestyle='--', linewidth=1.4,
-                   alpha=0.85, label=lbl)
-
-    # Reference lines
-    ax.axhline(x_star * 100, color='grey', linestyle=':', linewidth=1.2,
-               label=f'Analytical ESS x*={x_star*100:.2f}%  (standalone EGT)')
-    ax.axhline(66.28, color='grey', linestyle='-.', linewidth=1.2,
-               label='Simulated dynamic ESS ≈66.3%  (CEPPM, S→0)')
-    ax.axhline(X0 * 100, color='black', linestyle=':', linewidth=1.0,
-               alpha=0.5, label=f'Initial x₀={X0*100:.0f}%')
-
-    # Regime zone labels
     for xc, lbl in [
-        (H_EFF / 2,              'Failed\nmanagement'),
-        ((H_EFF + H_CRIT) / 2,  'Partial\nrecovery'),
-        ((H_CRIT + H_ERAD) / 2, 'Full\nsuppression'),
-        ((H_ERAD + 0.73) / 2,   'PF2050\nzone'),
+        (H_EFF/2,                     'Failed\nmanagement'),
+        ((H_EFF+H_CRIT)/2,            'Partial\nrecovery'),
+        ((H_CRIT+H_ERAD_TRUE)/2,      'Kiwi bonus\nzone'),
+        ((H_ERAD_TRUE+H_ERAD_THEO)/2, 'Full\nsuppression'),
+        ((H_ERAD_THEO+0.73)/2,        'PF2050\nzone'),
     ]:
-        ax.text(xc, 79, lbl, ha='center', va='top', fontsize=8.5,
-                color='#444444', style='italic')
+        ax.text(xc, 84, lbl, ha='center', va='top', fontsize=8,
+                color='#333', style='italic', linespacing=1.3)
 
-    ax.set_xlabel('Stoat harvest rate  h  (annual proportion removed)',
-                  fontsize=12)
+    ax.set_xlabel('Stoat harvest rate  h  (annual proportion removed)', fontsize=12)
     ax.set_ylabel('Open foraging proportion at t=200  (%)', fontsize=12)
     ax.set_title(
-        'CEPPM — Equilibrium open foraging strategy vs harvest rate\n'
-        f'Intervention year={intervention_year},  t={t_max},  '
-        f'K₀={K0},  S₀={S0},  x₀={X0*100:.0f}%  |  '
-        f'S_floor={S_MAX*(1-0.35/R_STOAT):.3f},  '
-        f'h_crit={H_CRIT:.2f},  PI_BAR_ESS={hybrid_model.egt_model.average_payoff(x_star):.4f}',
+        f'CEPPM — Equilibrium foraging strategy vs harvest rate\n'
+        f'Intervention yr={intervention_year}  t={t_max}  '
+        f'K₀={K0}  S₀={S0}  x₀={X0*100:.0f}%  |  '
+        f'h_crit={H_CRIT:.2f}  h_erad={H_ERAD_TRUE:.3f}  '
+        f'PI_BAR_ESS={hybrid_model.egt_model.average_payoff(x_star):.4f}',
         fontsize=10
     )
-    ax.set_xlim(0, 0.72)
-    ax.set_ylim(0, 86)
-    ax.xaxis.set_major_formatter(
-        plt.FuncFormatter(lambda v, _: f'{v:.2f}')
-    )
-    ax.legend(fontsize=8.5, loc='lower right', framealpha=0.9)
-    ax.grid(True, alpha=0.25)
+    ax.set_xlim(0, 0.72); ax.set_ylim(0, 90)
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v,_: f'{v:.2f}'))
+
+    legend_els = [
+        plt.Line2D([0],[0], color='#111', lw=2.2, label='CEPPM equilibrium x(h)'),
+        plt.Line2D([0],[0], color='#555', ls=':', lw=1.2,
+                   label=f'Analytical ESS x*={x_star*100:.2f}%'),
+        plt.Line2D([0],[0], color='#555', ls='-.', lw=1.2,
+                   label='Simulated ESS ≈66.3%'),
+        plt.Line2D([0],[0], color='black', ls=':', lw=1.0, alpha=0.5,
+                   label=f'Initial x₀={X0*100:.0f}%'),
+        plt.Line2D([0],[0], color='#d62728', ls='--', lw=1.5,
+                   label=f'h≈{H_EFF} effective recovery threshold'),
+        plt.Line2D([0],[0], color='#ff7f0e', ls='--', lw=1.5,
+                   label=f'h_crit={H_CRIT:.2f} non-kiwi eq. collapses'),
+        plt.Line2D([0],[0], color='#b8860b', ls='--', lw=1.5,
+                   label=f'h_erad≈{H_ERAD_TRUE:.3f} true eradication threshold'),
+        plt.Line2D([0],[0], color='#1f77b4', ls='--', lw=1.5,
+                   label=f'h_erad_theo={H_ERAD_THEO:.2f} PF2050 upper bound'),
+        mpatches.Patch(color='#d62728', alpha=0.25, label='Failed management zone'),
+        mpatches.Patch(color='#ff7f0e', alpha=0.25, label='Partial recovery zone'),
+        mpatches.Patch(color='#f5c518', alpha=0.35, label='Kiwi bonus zone'),
+        mpatches.Patch(color='#2ca02c', alpha=0.25, label='Full suppression zone'),
+        mpatches.Patch(color='#1f77b4', alpha=0.25, label='PF2050 / eradication zone'),
+    ]
+    ax.legend(handles=legend_els, fontsize=7.5, loc='lower right',
+              framealpha=0.92, ncol=2)
+    ax.grid(True, alpha=0.20)
     plt.tight_layout()
     plt.show()
 
     print(f"\n  Key values from sweep:")
-    print(f"    x at h=0.00 : {x_eq[0]:.1f}%  (unmanaged baseline)")
-    h_idx_eff  = int(np.argmin(np.abs(h_vals - H_EFF)))
-    h_idx_crit = int(np.argmin(np.abs(h_vals - H_CRIT)))
-    h_idx_erad = int(np.argmin(np.abs(h_vals - H_ERAD)))
-    print(f"    x at h≈{H_EFF} : {x_eq[h_idx_eff]:.1f}%  (effective recovery threshold)")
-    print(f"    x at h={H_CRIT} : {x_eq[h_idx_crit]:.1f}%  (stoat suppression threshold)")
-    print(f"    x at h={H_ERAD} : {x_eq[h_idx_erad]:.1f}%  (eradication bound)")
-    print(f"    x at h=0.72 : {x_eq[-1]:.1f}%  (maximum sweep)")
+    for hv_check, label in [
+        (0.00, 'h=0.00 (unmanaged)'),
+        (H_EFF,       f'h≈{H_EFF} (eff. recovery threshold)'),
+        (H_CRIT,      f'h_crit={H_CRIT:.2f}'),
+        (H_ERAD_TRUE, f'h_erad≈{H_ERAD_TRUE:.3f}'),
+        (H_ERAD_THEO, f'h_erad_theo={H_ERAD_THEO:.2f}'),
+    ]:
+        idx = int(np.argmin(np.abs(h_vals-hv_check)))
+        print(f"    x at {label}: {x_eq[idx]:.1f}%")
 
     return h_vals, np.array(x_eq)
+
+
+# ============================================================================
+# PART 7C: THREE-MODEL COMPARISON
+# ============================================================================
+
+def three_model_comparison(hybrid_model, t_max=None):
+    """
+    Compares three models across five scenarios:
+      1. Standalone EGT — strategy evolution only, base payoffs, no population
+         dynamics. Scenario-blind: converges to x*=68.75% regardless of h.
+      2. Standalone L-V — population dynamics only, strategy fixed at x=X0.
+         Behaviourally static: misses post-intervention strategy shift.
+      3. CEPPM (coupled) — full bidirectional coupling via dynamic payoffs
+         and strategy-dependent L-V parameters.
+
+    Updated scenarios (h=0.30 replaces h=0.60 to illustrate kiwi bonus zone):
+      Control     h=0.00  no intervention
+      Scenario 1  h=0.10  yr 20  failed management
+      Scenario 2a h=0.20  yr 20  partial recovery
+      Scenario 2c h=0.30  yr 20  kiwi bonus zone (NEW)
+      Scenario 3a h=0.40  yr 10  full suppression
+    """
+    if t_max is None:
+        t_max = T_MAX
+
+    H_CRIT      = R_STOAT - 0.35
+    f_Kmax      = 0.044*150/(1+0.044*0.1*150)
+    H_ERAD_TRUE = H_CRIT + 0.0175*f_Kmax
+    S_FLOOR_VAL = S_MAX*(1-0.35/R_STOAT)
+    SIM_ESS     = 66.28
+
+    bp = hybrid_model.base_payoffs
+    a_p,b_p = bp[0]; c_p,d_p = bp[1]
+    denom = (a_p-b_p)+(d_p-c_p)
+    x_star = float(np.clip((d_p-b_p)/denom, 0, 1))
+
+    # EGT payoff helper
+    def avg_payoff_egt(x):
+        piA = x*a_p+(1-x)*b_p
+        piB = x*c_p+(1-x)*d_p
+        return x*piA+(1-x)*piB
+    PI_BAR = avg_payoff_egt(x_star)
+
+    print("\n" + "="*70)
+    print("THREE-MODEL COMPARISON (EGT | L-V | CEPPM)")
+    print(f"  Scenarios: Control, 1(h=0.10), 2a(h=0.20), 2c(h=0.30), 3a(h=0.40)")
+    print(f"  h_crit={H_CRIT:.3f}  h_erad={H_ERAD_TRUE:.4f}  S_floor={S_FLOOR_VAL:.3f}")
+    print("="*70)
+
+    scenarios_3m = [
+        ('Control\n(h=0)',              0.00, T_MAX-1, 'Baseline'),
+        ('Scenario 1\nh=0.10\n(yr 20)', 0.10, 20,     'Failed management'),
+        ('Scenario 2a\nh=0.20\n(yr 20)',0.20, 20,     'Partial recovery'),
+        ('Scenario 2c\nh=0.30\n(yr 20)',0.30, 20,     'Kiwi bonus zone'),
+        ('Scenario 3a\nh=0.40\n(yr 10)',0.40, 10,     'Full suppression'),
+    ]
+
+    def run_egt_standalone(t_mx, n_pts=500):
+        def odes(t, y):
+            x = np.clip(y[0], 0.01, 0.99)
+            piA = x*bp[0,0]+(1-x)*bp[0,1]
+            piB = x*bp[1,0]+(1-x)*bp[1,1]
+            return [x*(piA-(x*piA+(1-x)*piB))]
+        sol = solve_ivp(odes, [0,t_mx], [X0],
+                        t_eval=np.linspace(0,t_mx,n_pts),
+                        method='RK45', rtol=1e-7, atol=1e-9)
+        return sol.t, sol.y[0]*100
+
+    def run_lv_standalone(h, int_yr, t_mx, n_pts=500):
+        r_eff  = 0.05*(avg_payoff_egt(X0)/PI_BAR)
+        al_eff = 0.044*(X0*1.3+(1-X0)*0.7)
+        def fK(K): return al_eff*K/(1+al_eff*0.1*K)
+        def floor_nat(S, fKv):
+            nat = R_STOAT*S*(1-S/S_MAX)+0.0175*fKv*S-0.35*S
+            nk  = R_STOAT*S*(1-S/S_MAX)-0.35*S
+            if S<=S_FLOOR_VAL and nk<0: nat=max(nat,0.)
+            return nat
+        def odes(t, y, hv):
+            K,S = max(y[0],0.), max(y[1],0.)
+            return [r_eff*K*(1-K/150)-fK(K)*S,
+                    floor_nat(S,fK(K))-hv*S]
+        ic = [K0, S0]
+        n1 = max(2, int(n_pts*int_yr/t_mx))
+        s1 = solve_ivp(lambda t,y: odes(t,y,0), [0,int_yr], ic,
+                       t_eval=np.linspace(0,int_yr,n1),
+                       method='RK45', rtol=1e-7, atol=1e-9)
+        ic2 = [float(s1.y[i,-1]) for i in range(2)]
+        n2  = max(2, n_pts-n1)
+        s2  = solve_ivp(lambda t,y: odes(t,y,h), [int_yr,t_mx], ic2,
+                        t_eval=np.linspace(int_yr,t_mx,n2),
+                        method='RK45', rtol=1e-7, atol=1e-9)
+        t  = np.concatenate([s1.t, s2.t])
+        K_ = np.concatenate([s1.y[0], s2.y[0]])
+        S_ = np.concatenate([s1.y[1], s2.y[1]])
+        return t, np.full(len(t), X0*100), K_, S_
+
+    all_res = {}
+    for lbl, h, iy, regime in scenarios_3m:
+        print(f"  Running {lbl.replace(chr(10),' ')} ...")
+        t_e, x_e          = run_egt_standalone(t_max)
+        t_l, xl, Kl, Sl   = run_lv_standalone(h, iy, t_max)
+        t_c, xc, Kc, Sc   = hybrid_model.simulate_hybrid_dynamics(
+            [X0,K0,S0], t_max,
+            intervention_time=iy, harvest_rate=h)
+        xc = np.array(xc)*100
+        all_res[lbl] = dict(h=h, iy=iy, regime=regime,
+                            egt=(t_e,x_e), lv=(t_l,xl,Kl,Sl),
+                            ceppm=(t_c,xc,Kc,Sc))
+        print(f"    EGT→{x_e[-1]:.1f}%  L-V K={Kl[-1]:.1f} S={Sl[-1]:.3f}"
+              f"  CEPPM x={xc[-1]:.1f}% K={Kc[-1]:.1f} S={Sc[-1]:.3f}")
+
+    EGT_C='#1f77b4'; LV_C='#2ca02c'; CEPPM_C='#d62728'
+    n_sc = len(scenarios_3m)
+    fig  = plt.figure(figsize=(15, 4.2*n_sc))
+    fig.suptitle(
+        'Three-model comparison: EGT only | L-V only | CEPPM (coupled)\n'
+        f'h_crit={H_CRIT:.2f}  h_erad={H_ERAD_TRUE:.3f}  '
+        f'S_floor={S_FLOOR_VAL:.3f}  x*={x_star*100:.2f}%  '
+        f'Sim ESS={SIM_ESS}%',
+        fontsize=11, y=1.002
+    )
+    import matplotlib.gridspec as gridspec
+    gs = gridspec.GridSpec(n_sc, 3, figure=fig, hspace=0.55, wspace=0.30)
+
+    for row, (lbl, h, iy, regime) in enumerate(scenarios_3m):
+        r    = all_res[lbl]
+        t_e, x_e          = r['egt']
+        t_l, xl, Kl, Sl   = r['lv']
+        t_c, xc, Kc, Sc   = r['ceppm']
+
+        ax_x = fig.add_subplot(gs[row,0])
+        ax_K = fig.add_subplot(gs[row,1])
+        ax_S = fig.add_subplot(gs[row,2])
+
+        # Strategy
+        ax_x.plot(t_e, x_e, color=EGT_C,   lw=1.8, ls='--',
+                  label=f'EGT only →{x_e[-1]:.1f}%')
+        ax_x.plot(t_l, xl,  color=LV_C,    lw=1.8, ls=':',
+                  label=f'L-V only (fixed {X0*100:.0f}%)')
+        ax_x.plot(t_c, xc,  color=CEPPM_C, lw=2.2,
+                  label=f'CEPPM →{xc[-1]:.1f}%')
+        ax_x.axhline(x_star*100, color='#888', lw=1.0, ls=':',
+                     label=f'ESS {x_star*100:.1f}%')
+        ax_x.axhline(SIM_ESS,   color='#888', lw=1.0, ls='-.',
+                     label=f'Sim ESS {SIM_ESS}%')
+        if iy < t_max:
+            ax_x.axvline(iy, color='#aaa', lw=1.0, ls=':', alpha=0.7)
+        ax_x.set_xlim(0,t_max); ax_x.set_ylim(0,90)
+        ax_x.set_ylabel('Open foraging (%)', fontsize=9)
+        ax_x.set_xlabel('Time (years)', fontsize=9)
+        ax_x.set_title(
+            f'{lbl.replace(chr(10)," ")} — {regime}\nStrategy x(t)',
+            fontsize=9)
+        ax_x.legend(fontsize=7.0, loc='upper left', framealpha=0.9)
+        ax_x.grid(True, alpha=0.18)
+
+        # Kiwi
+        ax_K.plot(t_l, Kl, color=LV_C,    lw=1.8, ls=':', label=f'L-V →{Kl[-1]:.1f}')
+        ax_K.plot(t_c, Kc, color=CEPPM_C, lw=2.2, label=f'CEPPM →{Kc[-1]:.1f}')
+        ax_K.axhline(150, color='#444', lw=1.0, ls='--', alpha=0.7, label='K_max=150')
+        ax_K.axhline(K0,  color='#999', lw=1.0, ls=':',  alpha=0.7, label=f'K₀={K0}')
+        if iy < t_max:
+            ax_K.axvline(iy, color='#aaa', lw=1.0, ls=':', alpha=0.7)
+        ax_K.set_xlim(0,t_max); ax_K.set_ylim(0,165)
+        ax_K.set_ylabel('Kiwi (birds / 1,000 ha)', fontsize=9)
+        ax_K.set_xlabel('Time (years)', fontsize=9)
+        ax_K.set_title('Kiwi K(t)', fontsize=9)
+        ax_K.legend(fontsize=7.5, loc='upper left', framealpha=0.9)
+        ax_K.grid(True, alpha=0.18)
+
+        # Stoat
+        ax_S.plot(t_l, Sl, color=LV_C,    lw=1.8, ls=':', label=f'L-V →{Sl[-1]:.3f}')
+        ax_S.plot(t_c, Sc, color=CEPPM_C, lw=2.2, label=f'CEPPM →{Sc[-1]:.3f}')
+        ax_S.axhline(S_FLOOR_VAL, color='#639922', lw=1.2, ls='--',
+                     alpha=0.85, label=f'S_floor={S_FLOOR_VAL:.3f}')
+        if iy < t_max:
+            ax_S.axvline(iy, color='#aaa', lw=1.0, ls=':', alpha=0.7,
+                         label=f'Intervention yr {iy}')
+        ax_S.set_xlim(0,t_max); ax_S.set_ylim(-0.05, 4.2)
+        ax_S.set_ylabel('Stoat (stoats / 1,000 ha)', fontsize=9)
+        ax_S.set_xlabel('Time (years)', fontsize=9)
+        ax_S.set_title('Stoat S(t)', fontsize=9)
+        ax_S.legend(fontsize=7.5, loc='upper right', framealpha=0.9)
+        ax_S.grid(True, alpha=0.18)
+
+    plt.savefig('three_model_comparison.png', dpi=160, bbox_inches='tight')
+    plt.show()
+    print("  Saved: three_model_comparison.png")
+    return all_res
 
 
 # ============================================================================
@@ -1707,12 +1973,20 @@ def run_complete_kiwi_analysis():
     print(f"  Stoats:      {S_ctrl[-1]:.3f}  (no control: {S_base[-1]:.3f})")
     S_floor_v = S_MAX * (1 - 0.35 / R_STOAT)
     h_crit_v  = R_STOAT - delta
+    f_Kmax_v  = 0.044*150/(1+0.044*0.1*150)
+    h_erad_v  = h_crit_v + 0.0175*f_Kmax_v
     if HARVEST_RATE >= R_STOAT:
-        print(f"  Stoat regime: ERADICATION (h={HARVEST_RATE:.2f} ≥ r_stoat={R_STOAT})")
+        print(f"  Stoat regime: THEORETICAL UPPER BOUND "
+              f"(h={HARVEST_RATE:.2f} ≥ h_erad_theo={R_STOAT:.2f})")
+    elif HARVEST_RATE >= h_erad_v:
+        print(f"  Stoat regime: FULL SUPPRESSION — stoats eradicated "
+              f"(h={HARVEST_RATE:.2f} ≥ h_erad={h_erad_v:.3f})")
     elif HARVEST_RATE > h_crit_v:
-        print(f"  Stoat regime: floor-suppressed (h={HARVEST_RATE:.2f} > h_crit={h_crit_v:.2f})")
+        print(f"  Stoat regime: KIWI BONUS ZONE — stoats persist through kiwi bonus "
+              f"(h_crit={h_crit_v:.2f} < h={HARVEST_RATE:.2f} < h_erad={h_erad_v:.3f})")
     else:
-        print(f"  Stoat regime: coexistence (h={HARVEST_RATE:.2f} ≤ h_crit={h_crit_v:.2f})")
+        print(f"  Stoat regime: COEXISTENCE / PARTIAL RECOVERY "
+              f"(h={HARVEST_RATE:.2f} ≤ h_crit={h_crit_v:.2f})")
 
     # EGT behavioural response
     int_payoffs = kiwi_payoffs + np.array([[0.117, 0.275], [0.062, 0.02]])
@@ -1797,20 +2071,23 @@ def run_complete_kiwi_analysis():
     print(f"  {'Kiwi population':30} {K_h[-1]:>12.1f} {K_hm[-1]:>14.1f}")
     print(f"  {'Stoat population':30} {S_h[-1]:>12.3f} {S_hm[-1]:>14.3f}")
 
+    # ========== STEP 6-7: SENSITIVITY + FIELD DATA ==========
+    sens_results = sensitivity_analysis(lv_model)
+    field_data, pop_data = analyze_field_data()
+
     # ========== STEP 5B: FORAGING vs HARVEST RATE SWEEP ==========
-    # Produces the Option 1 figure: equilibrium open foraging % vs h
-    # at fixed intervention year=5. Demonstrates that the CEPPM produces
-    # a continuous S-shaped response that the standalone EGT cannot replicate.
     print("\n" + "="*70)
-    print("STEP 5B: FORAGING STRATEGY vs HARVEST RATE SWEEP")
+    print("STEP 5B: FORAGING STRATEGY vs HARVEST RATE — FOUR-ZONE SWEEP")
     print("="*70)
     foraging_sweep_h, foraging_sweep_x = plot_foraging_vs_harvest_rate(
         hybrid_model, intervention_year=5, t_max=T_MAX
     )
 
-    # ========== STEP 6-7: SENSITIVITY + FIELD DATA ==========
-    sens_results = sensitivity_analysis(lv_model)
-    field_data, pop_data = analyze_field_data()
+    # ========== STEP 5C: THREE-MODEL COMPARISON ==========
+    print("\n" + "="*70)
+    print("STEP 5C: THREE-MODEL COMPARISON (EGT | L-V | CEPPM)")
+    print("="*70)
+    three_model_results = three_model_comparison(hybrid_model, t_max=T_MAX)
 
     # ========== STEP 8: SUMMARY ==========
     print("\n" + "="*70)
@@ -1830,16 +2107,27 @@ def run_complete_kiwi_analysis():
     print(f"Hybrid model (h={HARVEST_RATE:.2f}, intervention yr {INTERVENTION_TIME}) at year {T_MAX}:")
     print(f"  Open foraging: {X0:.3f} → {x_hm[-1]:.3f}  ({x_hm_change*100:+.1f}pp)")
     print(f"  Post-intervention strategy shift: {x_hm_post*100:+.1f}pp")
-    print(f"\nGeneralist stoat thresholds:")
-    S_floor_val = S_MAX * (1 - 0.35 / R_STOAT)
-    h_crit      = R_STOAT - delta
-    print(f"  S_floor={S_floor_val:.3f}, h_crit={h_crit:.3f}, h_erad={R_STOAT:.3f}")
+    print(f"\nGeneralist stoat thresholds (updated — nullcline analysis):")
+    S_floor_val  = S_MAX*(1-0.35/R_STOAT)
+    h_crit_v     = R_STOAT-delta
+    f_Kmax_v     = 0.044*150/(1+0.044*0.1*150)
+    h_erad_v     = h_crit_v+0.0175*f_Kmax_v
+    print(f"  S_floor={S_floor_val:.3f}  h_crit={h_crit_v:.3f}  "
+          f"h_erad={h_erad_v:.4f}  h_erad_theo={R_STOAT:.2f}")
     if HARVEST_RATE >= R_STOAT:
-        print(f"  → ERADICATION REGIME at h={HARVEST_RATE:.2f}")
-    elif HARVEST_RATE > h_crit:
-        print(f"  → FLOOR-SUPPRESSED at h={HARVEST_RATE:.2f}")
+        print(f"  → THEORETICAL ERADICATION REGIME at h={HARVEST_RATE:.2f} "
+              f"(h ≥ h_erad_theo={R_STOAT})")
+    elif HARVEST_RATE >= h_erad_v:
+        print(f"  → FULL SUPPRESSION at h={HARVEST_RATE:.2f} "
+              f"(h ≥ h_erad={h_erad_v:.3f})")
+    elif HARVEST_RATE > h_crit_v:
+        print(f"  → KIWI BONUS ZONE at h={HARVEST_RATE:.2f} "
+              f"(h_crit={h_crit_v:.2f} < h < h_erad={h_erad_v:.3f})")
+        print(f"     Stoats persist through kiwi predation bonus despite "
+              f"non-kiwi equilibrium collapse")
     else:
-        print(f"  → COEXISTENCE at h={HARVEST_RATE:.2f}")
+        print(f"  → COEXISTENCE / PARTIAL RECOVERY at h={HARVEST_RATE:.2f} "
+              f"(h ≤ h_crit={h_crit_v:.2f})")
     print(f"\nRemaining limitations:")
     print(f"  • Beech mast not explicitly modelled (r_stoat increases during mast)")
     print(f"  • Spatial reinvasion not modelled — real eradication harder than h > r_stoat")
@@ -1850,15 +2138,16 @@ def run_complete_kiwi_analysis():
     print("="*70)
 
     return {
-        'egt_model':          egt_model,
-        'lv_model':           lv_model,
-        'hybrid_model':       hybrid_model,
-        'scenario_results':   scenario_results,
-        'sensitivity_results': sens_results,
-        'field_data':         field_data,
-        'population_data':    pop_data,
-        'foraging_sweep_h':   foraging_sweep_h,
-        'foraging_sweep_x':   foraging_sweep_x,
+        'egt_model':            egt_model,
+        'lv_model':             lv_model,
+        'hybrid_model':         hybrid_model,
+        'scenario_results':     scenario_results,
+        'sensitivity_results':  sens_results,
+        'field_data':           field_data,
+        'population_data':      pop_data,
+        'foraging_sweep_h':     foraging_sweep_h,
+        'foraging_sweep_x':     foraging_sweep_x,
+        'three_model_results':  three_model_results,
     }
 
 
