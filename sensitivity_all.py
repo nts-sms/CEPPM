@@ -19,6 +19,9 @@ K_MAX        = 150
 h_handling   = 0.1
 S_FLOOR      = S_MAX * (1 - delta / R_STOAT)
 H_CRIT       = R_STOAT - delta
+f_Kmax_      = 0.044 * 150 / (1 + 0.044 * 0.1 * 150)
+H_ERAD_TRUE  = H_CRIT + beta * f_Kmax_   # ≈ 0.320
+r            = r_base                     # alias — avoids NameError in Parts 3/4
 BASE_PAYOFFS = np.array([[0.35, 0.55],[0.50, 0.22]])
 
 # Dynamic PI_BAR_ESS
@@ -71,8 +74,8 @@ def simulate_sens(delta_p, r_stoat_p, hr, it=INTERVENTION_YR, t_max=T_MAX):
 # ── Run all three harvest rates ───────────────────────────────────────────────
 harvest_runs = [
     (0.15, 'h=0.15 (failed management zone)'),
-    (0.25, 'h=0.25 (= h_crit)'),
-    (0.40, 'h=0.40 (above h_crit)'),
+    (0.25, f'h=0.25 (= h_crit; stoats persist via kiwi bonus to h_erad≈{H_ERAD_TRUE:.3f})'),
+    (0.40, f'h=0.40 (above h_erad≈{H_ERAD_TRUE:.3f}; full suppression)'),
 ]
 
 all_results = {}
@@ -191,39 +194,71 @@ for hr_label, res in all_results.items():
     ax6.set_title(f'h_crit vs r_stoat\n({hr_label})',fontsize=10)
     ax6.legend(fontsize=7.5); ax6.grid(True,alpha=0.3)
 
-    # Row 3: 2D heatmaps
+    # Row 3: 2D heatmaps — updated regime map with three zones
     ax7=fig.add_subplot(gs[2,0]); ax8=fig.add_subplot(gs[2,1]); ax9=fig.add_subplot(gs[2,2])
     D_mesh,R_mesh=np.meshgrid(DELTA_RANGE,RSTOAT_RANGE,indexing='ij')
     im7=ax7.contourf(D_mesh,R_mesh,res['X_grid'],levels=20,cmap='RdYlGn')
     r_hcrit=DELTA_RANGE+hr_fixed
     mask=(r_hcrit>=RSTOAT_RANGE[0])&(r_hcrit<=RSTOAT_RANGE[-1])
     ax7.plot(DELTA_RANGE[mask],r_hcrit[mask],'k-',lw=2.5,label='h_crit boundary')
+    # h_erad boundary: r_stoat = delta + h + beta*f(K_max)
+    r_herad = DELTA_RANGE + hr_fixed + beta*f_Kmax_
+    mask_e  = (r_herad>=RSTOAT_RANGE[0])&(r_herad<=RSTOAT_RANGE[-1])
+    if mask_e.any():
+        ax7.plot(DELTA_RANGE[mask_e], r_herad[mask_e], 'b--', lw=2,
+                 label=f'h_erad≈{hr_fixed+beta*f_Kmax_:.3f} boundary')
     ax7.plot(delta,R_STOAT,'w*',ms=14,label='Baseline',zorder=5)
     plt.colorbar(im7,ax=ax7,label='Open foraging % at t=200')
     ax7.set_xlabel('δ',fontsize=10); ax7.set_ylabel('r_stoat',fontsize=10)
-    ax7.set_title(f'Open foraging % — 2D\n({hr_label})',fontsize=10); ax7.legend(fontsize=8)
+    ax7.set_title(f'Open foraging % — 2D\n({hr_label})',fontsize=10); ax7.legend(fontsize=7.5)
 
     im8=ax8.contourf(D_mesh,R_mesh,res['K_grid'],levels=20,cmap='RdYlGn')
     ax8.contour(D_mesh,R_mesh,res['K_grid'],levels=[K0],colors='white',linewidths=1.5,linestyles='--')
     ax8.plot(DELTA_RANGE[mask],r_hcrit[mask],'k-',lw=2.5,label='h_crit boundary')
+    if mask_e.any():
+        ax8.plot(DELTA_RANGE[mask_e], r_herad[mask_e], 'b--', lw=2,
+                 label=f'h_erad boundary')
     ax8.plot(delta,R_STOAT,'w*',ms=14,label='Baseline',zorder=5)
     plt.colorbar(im8,ax=ax8,label='Kiwi at t=200')
     ax8.set_xlabel('δ',fontsize=10); ax8.set_ylabel('r_stoat',fontsize=10)
-    ax8.set_title(f'Kiwi population — 2D\n({hr_label})',fontsize=10); ax8.legend(fontsize=8)
+    ax8.set_title(f'Kiwi population — 2D\n({hr_label})',fontsize=10); ax8.legend(fontsize=7.5)
 
-    regime=np.where(R_mesh-D_mesh>hr_fixed,1.0,0.0); regime[R_mesh<=D_mesh]=np.nan
-    ax9.contourf(D_mesh,R_mesh,regime,levels=[-0.5,0.5,1.5],colors=['#d62728','#2ca02c'],alpha=0.6)
-    ax9.plot(DELTA_RANGE[mask],r_hcrit[mask],'k-',lw=3,label=f'h_crit={hr_fixed:.2f} boundary')
-    ax9.plot(delta,R_STOAT,'w*',ms=16,zorder=5,label='Baseline')
-    from matplotlib.patches import Patch
+    # Three-zone regime map: failed | kiwi bonus | full suppression
+    # Zone 0: r_stoat - delta <= h  (h_crit not reached — non-kiwi sustains stoats OR stoat extinct)
+    # Zone 1: h_crit < r_stoat-delta <= h_erad_local  (kiwi bonus zone)
+    # Zone 2: r_stoat-delta > h_erad_local  (full suppression above h_erad)
+    h_erad_local = hr_fixed + beta*f_Kmax_
+    regime3 = np.full_like(D_mesh, np.nan)
+    valid = R_mesh > D_mesh   # r_stoat > delta required
+    regime3[valid & (R_mesh - D_mesh <= hr_fixed)]                      = 0  # h < h_crit
+    regime3[valid & (R_mesh - D_mesh >  hr_fixed) &
+                   (R_mesh - D_mesh <= h_erad_local)]                   = 1  # kiwi bonus zone
+    regime3[valid & (R_mesh - D_mesh >  h_erad_local)]                  = 2  # full suppression
+
+    from matplotlib.patches  import Patch
+    from matplotlib.colors   import BoundaryNorm
+    from matplotlib.colorbar import ColorbarBase
+    cmap3  = plt.matplotlib.colors.ListedColormap(['#d62728','#f5c518','#2ca02c'])
+    norm3  = BoundaryNorm([-0.5,0.5,1.5,2.5], cmap3.N)
+    ax9.contourf(D_mesh, R_mesh, regime3, levels=[-0.5,0.5,1.5,2.5],
+                 colors=['#d62728','#f5c518','#2ca02c'], alpha=0.65)
+    ax9.plot(DELTA_RANGE[mask], r_hcrit[mask], 'k-', lw=2.5,
+             label=f'h_crit boundary (r_stoat−δ={hr_fixed:.2f})')
+    if mask_e.any():
+        ax9.plot(DELTA_RANGE[mask_e], r_herad[mask_e], 'b--', lw=2,
+                 label=f'h_erad boundary (≈{h_erad_local:.3f})')
+    ax9.plot(delta, R_STOAT, 'w*', ms=16, zorder=5, label='Baseline')
     ax9.legend(handles=[
-        Patch(facecolor='#d62728',alpha=0.6,label=f'h={hr_fixed:.2f} insufficient'),
-        Patch(facecolor='#2ca02c',alpha=0.6,label=f'h={hr_fixed:.2f} sufficient'),
+        Patch(facecolor='#d62728',alpha=0.65,label=f'h={hr_fixed:.2f} < h_crit (insufficient)'),
+        Patch(facecolor='#f5c518',alpha=0.65,label=f'Kiwi bonus zone (h_crit to h_erad)'),
+        Patch(facecolor='#2ca02c',alpha=0.65,label=f'Full suppression (h > h_erad≈{h_erad_local:.3f})'),
         plt.Line2D([0],[0],color='k',lw=2.5,label='h_crit boundary'),
+        plt.Line2D([0],[0],color='b',lw=2,ls='--',label='h_erad boundary'),
         plt.Line2D([0],[0],marker='*',color='w',markerfacecolor='white',ms=12,lw=0,label='Baseline'),
-    ],fontsize=8,loc='upper left')
+    ],fontsize=7.5,loc='upper left')
     ax9.set_xlabel('δ',fontsize=10); ax9.set_ylabel('r_stoat',fontsize=10)
-    ax9.set_title(f'Regime map\n({hr_label})',fontsize=10); ax9.grid(True,alpha=0.2)
+    ax9.set_title(f'Three-zone regime map\n({hr_label})',fontsize=10)
+    ax9.grid(True,alpha=0.2)
 
     slug = hr_label.replace(' ','_').replace('=','').replace('(','').replace(')','').replace('.','')
     fname = f'/mnt/user-data/outputs/sensitivity_{slug}.png'
@@ -512,9 +547,9 @@ LV_PARAMS = [
     ('delta', np.linspace(0.15, 0.55, 30), delta,       'δ (stoat natural mortality)', 'Stoat natural mortality δ', '#1f77b4'),
 ]
 LV_HARVEST = [
-    (0.15, 'h=0.15 (failed zone)', '#d62728'),
-    (0.25, 'h=0.25 (= h_crit)',    '#ff7f0e'),
-    (0.40, 'h=0.40 (above h_crit)','#2ca02c'),
+    (0.15, 'h=0.15 (failed zone)',                                              '#d62728'),
+    (0.25, f'h=0.25 (= h_crit; kiwi bonus zone up to h_erad≈{H_ERAD_TRUE:.3f})','#ff7f0e'),
+    (0.40, f'h=0.40 (above h_erad≈{H_ERAD_TRUE:.3f}; full suppression)',         '#2ca02c'),
 ]
 LV_IT   = 20
 LV_TMAX = T_MAX
