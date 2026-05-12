@@ -700,7 +700,7 @@ print("\nAll sensitivity plots saved (δ/r_stoat, α/β, and L-V parameters).")
 # Tests how sensitive kiwi outcomes are to the year in which predator control
 # begins, at two harvest rates:
 #   h=0.16 — approximately the effective kiwi recovery threshold
-#   h=0.20 — Scenario 1b (above effective threshold, below h_crit)
+#   h=0.20 — Scenario 2a (above effective threshold, below h_crit)
 # Sweep covers intervention years 0–30 at t_max=200.
 # Key finding: at h=0.16 timing is irrelevant (harvest rate insufficient
 # for meaningful recovery regardless of when it starts); at h=0.20 timing
@@ -716,7 +716,7 @@ IT_RANGE  = list(range(0, 31))
 SNAPSHOTS_T = [50, 100, 200]
 TIMING_CONFIGS = [
     (0.16, 'h=0.16 (≈ effective recovery threshold)', '#9467bd'),
-    (0.20, 'h=0.20 (Scenario 1b)',                    '#ff7f0e'),
+    (0.20, 'h=0.20 (Scenario 2a)',                    '#ff7f0e'),
 ]
 
 def simulate_timing(it, hr, t_max=T_MAX):
@@ -803,7 +803,7 @@ for hr, hrlabel, hrcol in TIMING_CONFIGS:
 fig, axes = plt.subplots(2, 3, figsize=(17, 11))
 fig.suptitle(
     'Sensitivity to Intervention Timing\n'
-    'h=0.16 (≈ effective recovery threshold) vs h=0.20 (Scenario 1b)',
+    'h=0.16 (≈ effective recovery threshold) vs h=0.20 (Scenario 2a)',
     fontsize=12, fontweight='bold'
 )
 
