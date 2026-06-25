@@ -22,7 +22,7 @@ H_CRIT       = R_STOAT - delta
 f_Kmax_      = 0.044 * 150 / (1 + 0.044 * 0.1 * 150)
 H_ERAD_TRUE  = H_CRIT + beta * f_Kmax_   # ≈ 0.320
 r            = r_base                     # alias — avoids NameError in Parts 3/4
-BASE_PAYOFFS = np.array([[0.35, 0.55],[0.50, 0.22]])
+BASE_PAYOFFS = np.array([[0.35, 0.55],[0.45, 0.20]])   # v7: c=0.45, d=0.20
 
 # Dynamic PI_BAR_ESS
 a, b = BASE_PAYOFFS[0]; c, d = BASE_PAYOFFS[1]
@@ -44,10 +44,10 @@ def make_system(delta_p, r_stoat_p):
     def system(t, y, hr=0):
         x,K,S = y; x=np.clip(x,0.01,0.99); K=max(K,0); S=max(S,0)
         sig = 1/(1+np.exp(-3.0*(S-1.0)))
-        dp = np.array([[max(BASE_PAYOFFS[0,0]-0.40*sig,0.01),max(BASE_PAYOFFS[0,1]-0.40*sig,0.01)],
+        dp = np.array([[max(BASE_PAYOFFS[0,0]-0.30*sig,0.01),max(BASE_PAYOFFS[0,1]-0.30*sig,0.01)],
                        [max(BASE_PAYOFFS[1,0]-0.15*sig,0.01),max(BASE_PAYOFFS[1,1]-0.15*sig,0.01)]])
         pA=x*dp[0,0]+(1-x)*dp[0,1]; pB=x*dp[1,0]+(1-x)*dp[1,1]
-        pav=x*pA+(1-x)*pB; dxdt=x*(pA-pav) if 0<x<1 else 0
+        pav=x*pA+(1-x)*pB; dxdt=1.5*x*(pA-pav) if 0<x<1 else 0
         r_eff=r_base*(avg_payoff_base(x)/PI_BAR_ESS)
         a_eff=alpha*(x*1.3+(1-x)*0.7)
         f_K=(a_eff*K)/(1+a_eff*h_handling*K)
@@ -289,11 +289,11 @@ def make_system_ab(alpha_p, beta_p):
         x,K,S = y; x=np.clip(x,0.01,0.99); K=max(K,0); S=max(S,0)
         sig = 1/(1+np.exp(-3.0*(S-1.0)))
         dp = np.array([
-            [max(BASE_PAYOFFS[0,0]-0.40*sig,0.01), max(BASE_PAYOFFS[0,1]-0.40*sig,0.01)],
+            [max(BASE_PAYOFFS[0,0]-0.30*sig,0.01), max(BASE_PAYOFFS[0,1]-0.30*sig,0.01)],
             [max(BASE_PAYOFFS[1,0]-0.15*sig,0.01), max(BASE_PAYOFFS[1,1]-0.15*sig,0.01)]
         ])
         pA=x*dp[0,0]+(1-x)*dp[0,1]; pB=x*dp[1,0]+(1-x)*dp[1,1]
-        pav=x*pA+(1-x)*pB; dxdt=x*(pA-pav) if 0<x<1 else 0
+        pav=x*pA+(1-x)*pB; dxdt=1.5*x*(pA-pav) if 0<x<1 else 0
         r_eff = r_base*(avg_payoff_base(x)/PI_BAR_ESS)
         a_eff = alpha_p*(x*1.3+(1-x)*0.7)
         f_K   = (a_eff*K)/(1+a_eff*h_handling*K)
@@ -562,12 +562,12 @@ def simulate_lv_param(r_p, alpha_p, beta_p, delta_p, hr, it, t_max):
         x = np.clip(x, 0.01, 0.99); K = max(K, 0); S = max(S, 0)
         sig = 1/(1 + np.exp(-3.0*(S - 1.0)))
         dp = np.array([
-            [max(BASE_PAYOFFS[0,0]-0.40*sig,0.01), max(BASE_PAYOFFS[0,1]-0.40*sig,0.01)],
+            [max(BASE_PAYOFFS[0,0]-0.30*sig,0.01), max(BASE_PAYOFFS[0,1]-0.30*sig,0.01)],
             [max(BASE_PAYOFFS[1,0]-0.15*sig,0.01), max(BASE_PAYOFFS[1,1]-0.15*sig,0.01)]
         ])
         pA  = x*dp[0,0]+(1-x)*dp[0,1]; pB=x*dp[1,0]+(1-x)*dp[1,1]
         pav = x*pA+(1-x)*pB
-        dxdt = x*(pA-pav) if 0<x<1 else 0
+        dxdt = 1.5*x*(pA-pav) if 0<x<1 else 0
         r_eff  = r_p*(avg_payoff_base(x)/PI_BAR_ESS)
         a_eff  = alpha_p*(x*1.3+(1-x)*0.7)
         f_K    = (a_eff*K)/(1+a_eff*h_handling*K)
@@ -588,10 +588,10 @@ def simulate_lv_param(r_p, alpha_p, beta_p, delta_p, hr, it, t_max):
         def sys_hr(t, y):
             x,K,S = y; x=np.clip(x,0.01,0.99); K=max(K,0); S=max(S,0)
             sig=1/(1+np.exp(-3.0*(S-1.0)))
-            dp=np.array([[max(BASE_PAYOFFS[0,0]-0.40*sig,0.01),max(BASE_PAYOFFS[0,1]-0.40*sig,0.01)],
+            dp=np.array([[max(BASE_PAYOFFS[0,0]-0.30*sig,0.01),max(BASE_PAYOFFS[0,1]-0.30*sig,0.01)],
                          [max(BASE_PAYOFFS[1,0]-0.15*sig,0.01),max(BASE_PAYOFFS[1,1]-0.15*sig,0.01)]])
             pA=x*dp[0,0]+(1-x)*dp[0,1]; pB=x*dp[1,0]+(1-x)*dp[1,1]
-            pav=x*pA+(1-x)*pB; dxdt=x*(pA-pav) if 0<x<1 else 0
+            pav=x*pA+(1-x)*pB; dxdt=1.5*x*(pA-pav) if 0<x<1 else 0
             r_eff=r_p*(avg_payoff_base(x)/PI_BAR_ESS); a_eff=alpha_p*(x*1.3+(1-x)*0.7)
             f_K=(a_eff*K)/(1+a_eff*h_handling*K); dKdt=r_eff*K*(1-K/K_MAX)-f_K*S
             nat=R_STOAT*S*(1-S/S_MAX)+beta_p*f_K*S-delta_p*S
@@ -715,7 +715,7 @@ print("="*60)
 IT_RANGE  = list(range(0, 31))
 SNAPSHOTS_T = [50, 100, 200]
 TIMING_CONFIGS = [
-    (0.16, 'h=0.16 (≈ effective recovery threshold)', '#9467bd'),
+    (0.16, 'h=0.163 (≈ effective recovery threshold)', '#9467bd'),
     (0.20, 'h=0.20 (Scenario 2a)',                    '#ff7f0e'),
 ]
 
@@ -748,12 +748,12 @@ def hybrid_system_timing(t, y, hr=0):
     x = np.clip(x, 0.01, 0.99); K = max(K, 0); S = max(S, 0)
     sig = 1 / (1 + np.exp(-3.0*(S - 1.0)))
     dp = np.array([
-        [max(BASE_PAYOFFS[0,0]-0.40*sig, 0.01), max(BASE_PAYOFFS[0,1]-0.40*sig, 0.01)],
+        [max(BASE_PAYOFFS[0,0]-0.30*sig, 0.01), max(BASE_PAYOFFS[0,1]-0.30*sig, 0.01)],
         [max(BASE_PAYOFFS[1,0]-0.15*sig, 0.01), max(BASE_PAYOFFS[1,1]-0.15*sig, 0.01)]
     ])
     pA  = x*dp[0,0]+(1-x)*dp[0,1]; pB=x*dp[1,0]+(1-x)*dp[1,1]
     pav = x*pA+(1-x)*pB
-    dxdt = x*(pA-pav) if 0 < x < 1 else 0
+    dxdt = 1.5*x*(pA-pav) if 0 < x < 1 else 0
     r_eff  = r*(avg_payoff_base(x)/PI_BAR_ESS)
     a_eff  = alpha*(x*1.3+(1-x)*0.7)
     f_K    = (a_eff*K)/(1+a_eff*h_handling*K)
@@ -803,7 +803,7 @@ for hr, hrlabel, hrcol in TIMING_CONFIGS:
 fig, axes = plt.subplots(2, 3, figsize=(17, 11))
 fig.suptitle(
     'Sensitivity to Intervention Timing\n'
-    'h=0.16 (≈ effective recovery threshold) vs h=0.20 (Scenario 2a)',
+    'h=0.163 (≈ effective recovery threshold) vs h=0.20 (Scenario 2a)',
     fontsize=12, fontweight='bold'
 )
 
@@ -841,8 +841,8 @@ ax = axes[1, 1]
 for hr, hrlabel, hrcol in TIMING_CONFIGS:
     res = timing_results[hr]
     ax.plot(IT_RANGE, res['x_final'], color=hrcol, lw=2.5, label=hrlabel)
-ax.axhline(66.3, color='purple', ls=':', lw=1.2, alpha=0.6, label='Simulated ESS 66.3%')
-ax.axhline(19.1, color='gray',   ls=':', lw=1.2, alpha=0.6, label='Unmanaged 19.1%')
+ax.axhline(76.2, color='purple', ls=':', lw=1.2, alpha=0.6, label='Simulated ESS 76.2%')
+ax.axhline(44.5, color='gray',   ls=':', lw=1.2, alpha=0.6, label='Unmanaged 44.5%')
 ax.set_xlabel('Intervention year', fontsize=11)
 ax.set_ylabel('Open foraging % at t=200', fontsize=11)
 ax.set_title('Open foraging proportion at t=200', fontsize=12)
