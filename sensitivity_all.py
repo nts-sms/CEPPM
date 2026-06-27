@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from scipy.integrate import solve_ivp
 import matplotlib
@@ -6,6 +7,10 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import warnings
 warnings.filterwarnings('ignore')
+
+# ── Output directory (Colab-compatible) ───────────────────────────────────────
+OUTPUT_DIR = '/content/sensitivity_outputs'
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ── Core parameters ───────────────────────────────────────────────────────────
 K0, S0, X0   = 20, 3, 0.3
@@ -261,7 +266,7 @@ for hr_label, res in all_results.items():
     ax9.grid(True,alpha=0.2)
 
     slug = hr_label.replace(' ','_').replace('=','').replace('(','').replace(')','').replace('.','')
-    fname = f'/mnt/user-data/outputs/sensitivity_{slug}.png'
+    fname = f'{OUTPUT_DIR}/sensitivity_{slug}.png'
     fig.suptitle(f'Sensitivity analysis: {hr_label}\nintervention yr={INTERVENTION_YR}, t={T_MAX}, PI_BAR_ESS={PI_BAR_ESS:.4f}',
                  fontsize=12,fontweight='bold')
     plt.savefig(fname,dpi=150,bbox_inches='tight')
@@ -515,7 +520,7 @@ for hr_label, res in ab_results.items():
     ax9.grid(True, alpha=0.2)
 
     slug = hr_label.replace(' ','_').replace('=','').replace('(','').replace(')','').replace('.','')
-    fname = f'/mnt/user-data/outputs/sensitivity_alpha_beta_{slug}.png'
+    fname = f'{OUTPUT_DIR}/sensitivity_alpha_beta_{slug}.png'
     fig.suptitle(f'Sensitivity to α and β: {hr_label}\n'
                  f'intervention yr={INTERVENTION_YR}, t={T_MAX}, '
                  f'δ={delta}, r_stoat={R_STOAT}, PI_BAR_ESS={PI_BAR_ESS:.4f}',
@@ -689,7 +694,7 @@ for row, (hr, hrlabel, hrcol) in enumerate(LV_HARVEST):
             ax.legend(fontsize=7)
 
 plt.tight_layout()
-lv_fname = '/mnt/user-data/outputs/sensitivity_lv_parameters.png'
+lv_fname = f'{OUTPUT_DIR}/sensitivity_lv_parameters.png'
 plt.savefig(lv_fname, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\nSaved: {lv_fname}")
@@ -871,7 +876,7 @@ ax.legend(fontsize=7.5); ax.grid(True, alpha=0.3)
 ax.set_xlim(0, 30); ax.set_ylim(-5, K_MAX+10)
 
 plt.tight_layout()
-timing_fname = '/mnt/user-data/outputs/sensitivity_intervention_timing.png'
+timing_fname = f'{OUTPUT_DIR}/sensitivity_intervention_timing.png'
 plt.savefig(timing_fname, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\nSaved: {timing_fname}")
