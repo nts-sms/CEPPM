@@ -29,11 +29,16 @@ Outputs:
   sensitivity_x0_klearn_heatmap.png        — 2D K(t=200) heatmap: x0 x kappa_learn at h=0.40
 """
 
+import os
 import numpy as np
 from scipy.integrate import solve_ivp
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+# ── Output directory (Colab-compatible) ───────────────────────────────────────
+OUTPUT_DIR = '/content/sensitivity_outputs'
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ── Core parameters (v6: ORIGINAL payoff relativities, reframed as utility) ──
 a, b, c, d   = 0.35, 0.55, 0.45, 0.20         # v7: c=0.45, d=0.20
@@ -201,7 +206,7 @@ ax1.set_title('Scenario 3a (h=0.40, intervention yr 10)\nx(t) across plausible k
 ax1.legend(fontsize=7.5, loc='lower right')
 ax1.set_xlim(0, 100)
 plt.tight_layout()
-plt.savefig('/mnt/user-data/outputs/sensitivity_kappa_learn_trajectories.png',
+plt.savefig(f'{OUTPUT_DIR}/sensitivity_kappa_learn_trajectories.png',
             dpi=150, bbox_inches='tight', facecolor=BG)
 print("\nSaved: sensitivity_kappa_learn_trajectories.png")
 
@@ -220,7 +225,7 @@ ax2.set_title('EGT relaxation half-life vs. LV subsystem half-life\n'
               '(bars right of red line = EGT slower than LV; left = EGT faster)')
 ax2.legend(fontsize=9, loc='lower right')
 plt.tight_layout()
-plt.savefig('/mnt/user-data/outputs/sensitivity_kappa_learn_timescale.png',
+plt.savefig(f'{OUTPUT_DIR}/sensitivity_kappa_learn_timescale.png',
             dpi=150, bbox_inches='tight', facecolor=BG)
 print("Saved: sensitivity_kappa_learn_timescale.png")
 
@@ -310,7 +315,7 @@ ax3b.legend(fontsize=7.5, loc='upper left')
 ax3b.set_xlim(0, T_MAX)
 
 plt.tight_layout()
-plt.savefig('/mnt/user-data/outputs/sensitivity_x0_trajectories.png',
+plt.savefig(f'{OUTPUT_DIR}/sensitivity_x0_trajectories.png',
             dpi=150, bbox_inches='tight', facecolor=BG)
 print("\nSaved: sensitivity_x0_trajectories.png")
 
@@ -396,6 +401,6 @@ ax4b.set_xticklabels(['0.1', '0.3', '1.0', '3.0', '10.0'])
 ax4b.legend(fontsize=8, loc='upper left')
 
 plt.tight_layout()
-plt.savefig('/mnt/user-data/outputs/sensitivity_x0_klearn_heatmap.png',
+plt.savefig(f'{OUTPUT_DIR}/sensitivity_x0_klearn_heatmap.png',
             dpi=150, bbox_inches='tight', facecolor=BG)
 print("Saved: sensitivity_x0_klearn_heatmap.png")
