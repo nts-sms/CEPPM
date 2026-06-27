@@ -41,9 +41,14 @@ Expected behaviour (pre-run hypothesis):
     effective threshold will differ from continuous case
 """
 
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
+
+# ── Output directory (Colab-compatible) ───────────────────────────────────────
+OUTPUT_DIR = '/content/sensitivity_outputs'
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ============================================================================
 # V7 PARAMETERS — copied from kiwi_conservation_analysis_v7.py
@@ -415,7 +420,7 @@ def run_pulsed_comparison():
     ax_S_zoom.grid(True, alpha=0.25)
 
     plt.tight_layout(rect=[0, 0, 1, 1])
-    plt.savefig('/mnt/user-data/outputs/pulsed_h_comparison.png',
+    plt.savefig(f'{OUTPUT_DIR}/pulsed_h_comparison.png',
                 dpi=150, bbox_inches='tight')
     plt.show()
     print("\n  Figure saved: pulsed_h_comparison.png")
