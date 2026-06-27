@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CEPPM — Kiwi Conservation Model</title>
+<!-- annotation plugin MUST come after Chart.js but both before body scripts -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-annotation/3.0.1/chartjs-plugin-annotation.min.js"></script>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg:        #84a680;
+    --canopy:    #2d4a32;
+    --fern:      #4a7c59;
+    --moss:      #c8dece;
+    --mist:      #e4ede4;
+    --paper:     #f2f5f0;
+    --dark:      #1a2e1e;
+    --kiwi:      #c87941;
+    --stoat:     #c84141;
+    --strategy:  #4169a8;
+    --threshold: #e8c547;
+    --mono:      'DM Mono', monospace;
+    --sans:      'DM Sans', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; overflow: hidden; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--paper);
+    font-size: 15px;
+    line-height: 1.5;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── LOADER ── */
+  #loader {
+    position: fixed; inset: 0;
+    background: var(--dark);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    z-index: 100;
+    gap: 16px;
+  }
+  .loader-kiwi { animation: bob 1.4s ease-in-out infinite; line-height: 0; }
+  @keyframes bob {
+    0%,100% { transform: translateY(0); }
+    50%      { transform: translateY(-10px); }
+  }
+  .loader-text { font-family: var(--mono); font-size: 13px; color: #7aab8a; letter-spacing: 0.05em; }
+  .loader-bar { width: 200px; height: 3px; background: var(--canopy); border-radius: 2px; overflow: hidden; }
+  .loader-fill { height: 100%; background: var(--fern); animation: fill 6s ease-out forwards; }
+  @keyframes fill { from { width: 0 } to { width: 95% } }
+
+  /* ── HEADER ── */
+  header {
+    background: var(--canopy);
+    border-bottom: 2px solid var(--fern);
+    padding: 16px 28px 14px;
+    display: flex; align-items: flex-end; gap: 24px; flex-wrap: wrap;
+    flex-shrink: 0;
+  }
+  .header-title { flex: 1; min-width: 240px; }
+  .eyebrow { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: #7aab8a; text-transform: uppercase; margin-bottom: 4px; }
+  h1 { font-size: clamp(17px, 2.8vw, 24px); font-weight: 600; letter-spacing: -0.02em; color: var(--paper); line-height: 1.1; }
+  h1 span { color: #7aab8a; }
+  .header-authors { font-size: 12px; color: var(--moss); margin-top: 4px; font-weight: 300; }
+
+  /* ── LAYOUT ── */
+  main {
+    display: grid;
+    grid-template-columns: 290px 1fr;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* ── SIDEBAR ── */
+  aside {
+    background: var(--canopy);
+    border-right: 1px solid var(--fern);
+    padding: 18px 16px;
+    overflow-y: auto;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .section-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; color: #7aab8a; text-transform: uppercase; margin-bottom: 8px; }
+
+  /* Presets */
+  .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+  .preset-btn {
+    background: var(--dark); border: 1px solid var(--fern); color: var(--moss);
+    font-family: var(--mono); font-size: 11px; padding: 7px 6px;
+    border-radius: 4px; cursor: pointer; text-align: left; transition: all 0.15s; line-height: 1.3;
+  }
+  .preset-btn:hover { background: var(--fern); color: var(--paper); }
+  .preset-btn.active { background: var(--fern); border-color: #7aab8a; color: var(--paper); }
+  .preset-btn .sc-label { display: block; font-size: 9px; color: #7aab8a; margin-bottom: 1px; }
+  .preset-btn.active .sc-label { color: var(--mist); }
+
+  /* Sliders */
+  .slider-group { display: flex; flex-direction: column; gap: 14px; }
+  .slider-row label { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; color: var(--moss); margin-bottom: 5px; }
+  .slider-row label .val { font-family: var(--mono); font-size: 13px; color: var(--paper); font-weight: 500; }
+  input[type=range] { width: 100%; height: 4px; appearance: none; background: var(--dark); border-radius: 2px; outline: none; cursor: pointer; }
+  input[type=range]::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #7aab8a; border: 2px solid var(--paper); cursor: pointer; }
+  .h-markers { display: flex; justify-content: space-between; margin-top: 3px; font-family: var(--mono); font-size: 9px; color: var(--fern); }
+  .h-zone { font-size: 10px; color: var(--threshold); margin-top: 3px; font-family: var(--mono); min-height: 14px; }
+
+  /* Run button */
+  #run-btn {
+    background: var(--kiwi); color: var(--paper); border: none;
+    padding: 11px 0; border-radius: 5px; font-family: var(--sans);
+    font-size: 14px; font-weight: 600; cursor: pointer; width: 100%;
+    letter-spacing: 0.02em; transition: opacity 0.2s;
+  }
+  #run-btn:hover { opacity: 0.88; }
+  #run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .run-status { font-family: var(--mono); font-size: 11px; color: #7aab8a; text-align: center; min-height: 16px; }
+
+  /* Threshold legend */
+  .thresh-list { font-family: var(--mono); font-size: 11px; color: var(--moss); line-height: 2; }
+  .thresh-list span { color: var(--threshold); }
+  .thresh-list .dim { color: var(--fern); }
+
+  /* ── RESULTS ── */
+  .results-panel {
+    display: flex; flex-direction: column;
+    overflow: hidden; min-height: 0;
+    background: var(--bg);
+  }
+
+  /* Summary bar */
+  .summary-bar {
+    background: rgba(45,74,50,0.85);
+    border-bottom: 1px solid var(--fern);
+    padding: 10px 20px;
+    display: flex; gap: 0; align-items: stretch; flex-wrap: wrap;
+  }
+  .stat-block { flex: 1; min-width: 100px; padding: 4px 14px; border-right: 1px solid var(--fern); }
+  .stat-block:first-child { padding-left: 0; }
+  .stat-block:last-child { border-right: none; }
+  .stat-label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; color: #7aab8a; text-transform: uppercase; margin-bottom: 2px; }
+  .stat-pair { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .stat-val { font-family: var(--mono); font-size: 18px; font-weight: 500; color: var(--paper); }
+  .stat-val.kiwi-col  { color: var(--kiwi); }
+  .stat-val.stoat-col { color: var(--stoat); }
+  .stat-val.strat-col { color: #7aadff; }
+  .stat-base { font-family: var(--mono); font-size: 11px; color: var(--fern); }
+  .stat-delta { font-family: var(--mono); font-size: 11px; }
+  .stat-delta.pos { color: #7ec87e; }
+  .stat-delta.neg { color: var(--stoat); }
+
+  /* Charts */
+  .charts-grid {
+    flex: 1; display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 1px; background: var(--fern); overflow: hidden; min-height: 0;
+  }
+  .chart-wrap {
+    background: rgba(26,46,30,0.88); padding: 14px 14px 8px;
+    display: flex; flex-direction: column;
+    overflow: hidden; min-height: 0;
+  }
+  .chart-title { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: #7aab8a; text-transform: uppercase; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .chart-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  canvas { flex: 1; min-height: 0; max-height: 100%; display: block; }
+
+  /* Empty state */
+  .empty-state { grid-column: 1/-1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--fern); background: rgba(26,46,30,0.5); }
+  .empty-state .icon { font-size: 40px; opacity: 0.5; }
+  .empty-state p { font-family: var(--mono); font-size: 12px; letter-spacing: 0.05em; }
+
+  @media (max-width: 800px) {
+    html, body { height: auto; overflow: auto; }
+    body { display: block; }
+    main { display: flex; flex-direction: column; height: auto; overflow: visible; }
+    aside { border-right: none; border-bottom: 1px solid var(--fern); overflow-y: visible; max-height: none; }
+    .results-panel { overflow: visible; }
+    .charts-grid { grid-template-columns: 1fr; overflow: visible; height: auto; }
+    .chart-wrap { overflow: visible; height: 260px; }
+    canvas { max-height: 100%; }
+    .summary-bar { flex-wrap: wrap; }
+    .stat-block { min-width: 45%; }
+  }
+</style>
+</head>
+<body>
+
+<div id="loader">
+  <div class="loader-kiwi">
+    <svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Body -->
+      <ellipse cx="38" cy="42" rx="22" ry="18" fill="#7aab8a"/>
+      <!-- Head -->
+      <ellipse cx="20" cy="30" rx="11" ry="10" fill="#7aab8a"/>
+      <!-- Eye -->
+      <circle cx="16" cy="27" r="2.2" fill="#1a2e1e"/>
+      <circle cx="15.2" cy="26.4" r="0.7" fill="white"/>
+      <!-- Beak (long, slightly downward) -->
+      <path d="M10 31 Q0 35 -2 37" stroke="#c87941" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+      <!-- Beak tip -->
+      <circle cx="-2" cy="37" r="1.2" fill="#c87941"/>
+      <!-- Wing hint -->
+      <path d="M28 38 Q38 32 52 36" stroke="#4a7c59" stroke-width="2" stroke-linecap="round" fill="none"/>
+      <!-- Tail feathers -->
+      <path d="M59 40 Q66 36 68 32" stroke="#4a7c59" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+      <path d="M59 42 Q67 40 70 37" stroke="#4a7c59" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+      <path d="M59 44 Q66 44 69 42" stroke="#4a7c59" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+      <!-- Legs -->
+      <line x1="36" y1="58" x2="32" y2="66" stroke="#c87941" stroke-width="2.2" stroke-linecap="round"/>
+      <line x1="32" y1="66" x2="27" y2="67" stroke="#c87941" stroke-width="2" stroke-linecap="round"/>
+      <line x1="32" y1="66" x2="30" y2="69" stroke="#c87941" stroke-width="2" stroke-linecap="round"/>
+      <line x1="44" y1="58" x2="40" y2="66" stroke="#c87941" stroke-width="2.2" stroke-linecap="round"/>
+      <line x1="40" y1="66" x2="35" y2="67" stroke="#c87941" stroke-width="2" stroke-linecap="round"/>
+      <line x1="40" y1="66" x2="38" y2="69" stroke="#c87941" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+  </div>
+  <div class="loader-text" id="loader-msg">Loading Python environment…</div>
+  <div class="loader-bar"><div class="loader-fill"></div></div>
+</div>
+
+<header>
+  <div class="header-title">
+    <div class="eyebrow">Coupled EGT–Population Model</div>
+    <h1>CEPPM — <span>Kiwi Conservation</span> Simulator</h1>
+    <div class="header-authors">Sierra Sharma &nbsp;·&nbsp; Epsom Girls Grammar School</div>
+  </div>
+</header>
+
+<main>
+  <aside>
+    <div>
+      <div class="section-label">Paper Scenarios</div>
+      <div class="preset-grid" id="presets">
+        <button class="preset-btn" data-h="0"    data-t="20" data-tmax="200"><span class="sc-label">Control</span>No harvest</button>
+        <button class="preset-btn" data-h="0.10" data-t="20" data-tmax="200"><span class="sc-label">Sc1</span>h=0.10 yr20</button>
+        <button class="preset-btn" data-h="0.20" data-t="20" data-tmax="200"><span class="sc-label">Sc2a</span>h=0.20 yr20</button>
+        <button class="preset-btn" data-h="0.25" data-t="20" data-tmax="200"><span class="sc-label">Sc2b</span>h=0.25 yr20</button>
+        <button class="preset-btn" data-h="0.30" data-t="20" data-tmax="200"><span class="sc-label">Sc2c</span>h=0.30 yr20</button>
+        <button class="preset-btn" data-h="0.40" data-t="10" data-tmax="200"><span class="sc-label">Sc3a</span>h=0.40 yr10</button>
+        <button class="preset-btn" data-h="0.60" data-t="2"  data-tmax="200"><span class="sc-label">Sc3b</span>h=0.60 yr2</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Custom Parameters</div>
+      <div class="slider-group">
+        <div class="slider-row">
+          <label>Harvest rate (h) <span class="val" id="h-val">0.25</span></label>
+          <input type="range" id="h-slider" min="0" max="0.8" step="0.01" value="0.25">
+          <div class="h-markers"><span>0</span><span>0.163</span><span>0.25</span><span>0.32</span><span>0.8</span></div>
+          <div class="h-zone" id="h-zone">Kiwi bonus zone</div>
+        </div>
+        <div class="slider-row">
+          <label>Intervention year <span class="val" id="t-val">20</span></label>
+          <input type="range" id="t-slider" min="1" max="50" step="1" value="20">
+        </div>
+        <div class="slider-row">
+          <label>Simulation duration <span class="val" id="tmax-val">200 yr</span></label>
+          <input type="range" id="tmax-slider" min="50" max="300" step="10" value="200">
+        </div>
+      </div>
+    </div>
+
+    <button id="run-btn" disabled>Run simulation</button>
+    <div class="run-status" id="run-status">Loading model…</div>
+
+    <div>
+      <div class="section-label">Harvest thresholds (v7)</div>
+      <div class="thresh-list">
+        <div><span>h_eff ≈ 0.163</span> — minimum for kiwi survival</div>
+        <div><span>h_crit = 0.25</span> — non-kiwi stoat floor collapses</div>
+        <div><span>h_erad ≈ 0.320</span> — stoat eradication threshold</div>
+        <div class="dim" style="margin-top:6px">x* = 77.78% &nbsp;|&nbsp; κ_learn = 1.5/yr</div>
+        <div class="dim">K₀=20 &nbsp;|&nbsp; S₀=3 &nbsp;|&nbsp; x₀=30%</div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="results-panel">
+    <div class="summary-bar">
+      <div class="stat-block">
+        <div class="stat-label">Kiwi at t_end</div>
+        <div class="stat-pair">
+          <span class="stat-val kiwi-col" id="s-K">—</span>
+          <span class="stat-base" id="s-K-base"></span>
+          <span class="stat-delta" id="s-K-delta"></span>
+        </div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-label">Stoat at t_end</div>
+        <div class="stat-pair">
+          <span class="stat-val stoat-col" id="s-S">—</span>
+          <span class="stat-base" id="s-S-base"></span>
+          <span class="stat-delta" id="s-S-delta"></span>
+        </div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-label">Open foraging at t_end</div>
+        <div class="stat-pair">
+          <span class="stat-val strat-col" id="s-x">—</span>
+          <span class="stat-base" id="s-x-base"></span>
+          <span class="stat-delta" id="s-x-delta"></span>
+        </div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-label">Regime</div>
+        <div class="stat-val" id="s-regime" style="font-size:13px;color:var(--threshold)">—</div>
+      </div>
+    </div>
+
+    <div class="charts-grid" id="charts-grid">
+      <div class="empty-state">
+        <div class="icon">🌿</div>
+        <p>Select a scenario or set parameters and run</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ── v7 MODEL PARAMETERS ───────────────────────────────────────────────────
+const P = {
+  a:0.35, b:0.55, c:0.45, d:0.20,
+  kappa:1.5,
+  r_base:0.05, K_max:150, alpha_base:0.044, H:0.1,
+  r_stoat:0.60, S_max:8.0, beta:0.0175, delta:0.35,
+  p_open:0.30, p_cover:0.15, k_sig:3.0, S_mid:1.0, S_floor:3.333,
+  X0:0.30, K0:20, S0:3.0
+};
+
+// ── CHART INSTANCES (kept so we can destroy before recreating) ────────────
+const chartInst = {};
+
+// ── PYODIDE ───────────────────────────────────────────────────────────────
+let pyodide = null;
+let pyReady = false;
+
+async function initPyodide() {
+  setStatus("Loading Python environment…");
+  pyodide = await loadPyodide();
+  setStatus("Loading numpy + scipy…");
+  await pyodide.loadPackage(["numpy","scipy"]);
+  setStatus("Initialising CEPPM v7…");
+  await pyodide.runPythonAsync(getPyCode());
+  pyReady = true;
+  document.getElementById("run-btn").disabled = false;
+  setStatus("Ready — select a scenario or set parameters");
+  document.getElementById("loader").style.display = "none";
+}
+
+function getPyCode() {
+  return `
+import numpy as np
+from scipy.integrate import solve_ivp
+import json
+
+# v7 fixed parameters
+a,b,c,d   = ${P.a},${P.b},${P.c},${P.d}
+kappa     = ${P.kappa}
+r_base    = ${P.r_base}
+K_max     = ${P.K_max}
+ab        = ${P.alpha_base}
+H         = ${P.H}
+r_stoat   = ${P.r_stoat}
+S_max     = ${P.S_max}
+beta      = ${P.beta}
+delta     = ${P.delta}
+p_open    = ${P.p_open}
+p_cover   = ${P.p_cover}
+k_sig     = ${P.k_sig}
+S_mid     = ${P.S_mid}
+S_floor   = ${P.S_floor}
+X0,K0,S0  = ${P.X0},${P.K0},${P.S0}
+
+# PI_BAR at ESS
+_x_ess = (d-b)/((a-b)+(d-c))
+def _pbar(x):
+    pA = x*a+(1-x)*b; pB = x*c+(1-x)*d
+    return x*pA+(1-x)*pB
+PI_BAR_ESS = _pbar(_x_ess)
+
+def sigma(S):
+    return 1.0/(1.0+np.exp(-k_sig*(S-S_mid)))
+
+def dyn_payoffs(x, S):
+    sig = sigma(S)
+    pA  = max(x*a+(1-x)*b - p_open*sig,  0.01)
+    pB  = max(x*c+(1-x)*d - p_cover*sig, 0.01)
+    return pA, pB
+
+def r_eff(x, S):
+    pA,pB = dyn_payoffs(x,S)
+    pb = x*pA+(1-x)*pB
+    return r_base * pb / PI_BAR_ESS
+
+def alpha_eff(x):
+    v = p_open*x + p_cover*(1-x)
+    return ab * v / (p_open*X0 + p_cover*(1-X0))
+
+def holling(K):
+    return ab*K/(1.0+ab*H*K)
+
+def ode(t, y, h_rate, t_int):
+    x,K,S = y
+    x = float(np.clip(x, 0.01, 0.99))
+    K = max(float(K), 0.0)
+    S = max(float(S), 0.0)
+    h = h_rate if t >= t_int else 0.0
+    pA,pB = dyn_payoffs(x, S)
+    pb    = x*pA + (1-x)*pB
+    dxdt  = kappa * x * (pA - pb)
+    r     = r_eff(x, S)
+    al    = alpha_eff(x)
+    fK    = al*K/(1+al*H*K)
+    dKdt  = r*K*(1-K/K_max) - fK*S
+    # Stoat floor enforcement: match v7 exactly
+    # non-kiwi growth component only (excludes kiwi bonus and harvest)
+    non_kiwi = r_stoat*S*(1-S/S_max) - delta*S
+    S_fl = S_max*(1 - delta/r_stoat)
+    natural_dSdt = r_stoat*S*(1-S/S_max) + beta*holling(K)*S - delta*S
+    if S <= S_fl and non_kiwi < 0:
+        natural_dSdt = max(natural_dSdt, 0.0)
+    dSdt  = natural_dSdt - h*S
+    return [dxdt, dKdt, dSdt]
+
+def run_sim(h_rate, t_int, t_max):
+    sol = solve_ivp(
+        ode, (0, t_max), [X0,K0,S0],
+        args=(h_rate, t_int),
+        t_eval=np.linspace(0, t_max, t_max*4+1),
+        method='RK45', rtol=1e-6, atol=1e-9, dense_output=False
+    )
+    return sol.t.tolist(), sol.y[0].tolist(), sol.y[1].tolist(), sol.y[2].tolist()
+
+print("CEPPM v7 ready")
+`;
+}
+
+// ── RUN ───────────────────────────────────────────────────────────────────
+async function runSim() {
+  if (!pyReady) return;
+  const h    = parseFloat(document.getElementById("h-slider").value);
+  const tInt = parseInt(document.getElementById("t-slider").value);
+  const tMax = parseInt(document.getElementById("tmax-slider").value);
+
+  document.getElementById("run-btn").disabled = true;
+  setStatus("Solving ODEs…");
+
+  try {
+    const raw = await pyodide.runPythonAsync(`
+import json as _json
+_t,_x,_K,_S   = run_sim(${h},    ${tInt}, ${tMax})
+_tb,_xb,_Kb,_Sb = run_sim(0.0, 99999, ${tMax})
+_json.dumps({"t":_t,"x":_x,"K":_K,"S":_S,"xb":_xb,"Kb":_Kb,"Sb":_Sb})
+`);
+    const d = JSON.parse(raw);
+    renderAll(d, h, tInt, tMax);
+    setStatus(`h=${h.toFixed(2)} · intervention yr ${tInt} · t=${tMax} yr`);
+  } catch(err) {
+    setStatus("Error: " + err.message);
+    console.error(err);
+  }
+  document.getElementById("run-btn").disabled = false;
+}
+
+// ── RENDER ────────────────────────────────────────────────────────────────
+function thinArr(arr, step) { return arr.filter((_,i)=>i%step===0); }
+
+function renderAll(d, h, tInt, tMax) {
+  // Destroy old charts first to avoid "canvas already in use"
+  ['x','K','S'].forEach(k => { if(chartInst[k]) { chartInst[k].destroy(); delete chartInst[k]; } });
+
+  document.getElementById("charts-grid").innerHTML = `
+    <div class="chart-wrap">
+      <div class="chart-title"><span class="chart-dot" style="background:#7aadff"></span>Open Foraging Proportion (x)</div>
+      <canvas id="c-x"></canvas>
+    </div>
+    <div class="chart-wrap">
+      <div class="chart-title"><span class="chart-dot" style="background:var(--kiwi)"></span>Kiwi Population (K &nbsp;/&nbsp;1,000 ha)</div>
+      <canvas id="c-K"></canvas>
+    </div>
+    <div class="chart-wrap">
+      <div class="chart-title"><span class="chart-dot" style="background:var(--stoat)"></span>Stoat Population (S &nbsp;/&nbsp;1,000 ha)</div>
+      <canvas id="c-S"></canvas>
+    </div>`;
+
+  // Thin data points for rendering speed
+  const step = Math.max(1, Math.floor(d.t.length / 300));
+  const tt  = thinArr(d.t,  step);
+  const xs  = thinArr(d.x,  step);
+  const Ks  = thinArr(d.K,  step);
+  const Ss  = thinArr(d.S,  step);
+  const xbs = thinArr(d.xb, step);
+  const Kbs = thinArr(d.Kb, step);
+  const Sbs = thinArr(d.Sb, step);
+
+  // Labels: year rounded to 1dp
+  const labels = tt.map(v => parseFloat(v.toFixed(1)));
+
+  // Find label index closest to intervention year (for annotation)
+  const intIdx = tt.reduce((best,v,i) => Math.abs(v-tInt) < Math.abs(tt[best]-tInt) ? i : best, 0);
+
+  // Annotation objects — only if h>0
+  const makeAnnotations = (extra) => {
+    if (h <= 0) return {};
+    const base = {
+      intLine: {
+        type:'line', scaleID:'x', value:intIdx,
+        borderColor:'rgba(232,197,71,0.75)', borderWidth:1.5, borderDash:[4,3],
+        label:{display:true, content:`yr ${tInt}`, color:'#e8c547',
+               font:{family:'monospace',size:10}, position:'start'}
+      }
+    };
+    return Object.assign(base, extra||{});
+  };
+
+  // Common options factory — uses category scale (labels array), so no type:'linear' needed
+  const opts = (yLabel, yMax, extraAnnotations) => ({
+    responsive:true, maintainAspectRatio:false,
+    animation:{duration:350},
+    plugins:{
+      legend:{labels:{color:'#c8dece', font:{size:10}, boxWidth:10}},
+      annotation:{annotations: makeAnnotations(extraAnnotations)}
+    },
+    scales:{
+      x:{
+        ticks:{color:'#7aab8a', font:{size:9}, maxTicksLimit:7,
+               callback:(val,i) => Number.isInteger(labels[i]) ? labels[i] : ''},
+        grid:{color:'rgba(74,124,89,0.2)'},
+        title:{display:true, text:'Year', color:'#7aab8a', font:{size:10}}
+      },
+      y:{
+        min:0, max:yMax||undefined,
+        ticks:{color:'#7aab8a', font:{size:9}},
+        grid:{color:'rgba(74,124,89,0.2)'},
+        title:{display:true, text:yLabel, color:'#7aab8a', font:{size:10}}
+      }
+    }
+  });
+
+  // Dataset builder — plain arrays, no {x,y} objects
+  const mkDS = (managed, baseline, cm, cb) => [
+    {label:'Managed',        data:managed,  borderColor:cm, borderWidth:2,   pointRadius:0, tension:0.3},
+    {label:'Baseline (h=0)', data:baseline, borderColor:cb, borderWidth:1.2, pointRadius:0, tension:0.3, borderDash:[5,4]}
+  ];
+
+  // Find y-index for x*=0.7778 annotation on the x-chart
+  const essYAnnotation = {
+    essLine:{
+      type:'line', scaleID:'y', value:0.7778,
+      borderColor:'rgba(122,171,138,0.4)', borderWidth:1, borderDash:[2,5],
+      label:{display:true, content:'x*=77.8%', color:'#7aab8a',
+             font:{family:'monospace',size:9}, position:'end'}
+    }
+  };
+
+  chartInst.x = new Chart(document.getElementById('c-x'), {
+    type:'line',
+    data:{labels, datasets: mkDS(xs, xbs, 'rgba(122,173,255,0.9)', 'rgba(122,173,255,0.3)')},
+    options: opts('Proportion open foraging', 1.05, h>0 ? essYAnnotation : {})
+  });
+
+  chartInst.K = new Chart(document.getElementById('c-K'), {
+    type:'line',
+    data:{labels, datasets: mkDS(Ks, Kbs, 'rgba(200,121,65,0.9)', 'rgba(200,121,65,0.3)')},
+    options: opts('Kiwi / 1,000 ha', 160)
+  });
+
+  chartInst.S = new Chart(document.getElementById('c-S'), {
+    type:'line',
+    data:{labels, datasets: mkDS(Ss, Sbs, 'rgba(200,65,65,0.9)', 'rgba(200,65,65,0.3)')},
+    options: opts('Stoats / 1,000 ha')
+  });
+
+  // Summary numbers
+  const xF=d.x[d.x.length-1], KF=d.K[d.K.length-1], SF=d.S[d.S.length-1];
+  const xbF=d.xb[d.xb.length-1], KbF=d.Kb[d.Kb.length-1], SbF=d.Sb[d.Sb.length-1];
+
+  setText('s-K', KF.toFixed(1));
+  setText('s-K-base', `base ${KbF.toFixed(1)}`);
+  setDelta('s-K-delta', KF-KbF, v=>v.toFixed(1));
+
+  setText('s-S', SF.toFixed(2));
+  setText('s-S-base', `base ${SbF.toFixed(2)}`);
+  setDelta('s-S-delta', -(SF-SbF), v=>v.toFixed(2)); // stoat reduction = positive
+
+  setText('s-x', (xF*100).toFixed(1)+'%');
+  setText('s-x-base', `base ${(xbF*100).toFixed(1)}%`);
+  setDelta('s-x-delta', (xF-xbF)*100, v=>v.toFixed(1)+'pp');
+
+  setText('s-regime', getRegime(h));
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────────────
+function setText(id,v){ document.getElementById(id).textContent=v; }
+function setDelta(id,val,fmt){
+  const el=document.getElementById(id);
+  if(Math.abs(val)<0.005){el.textContent='';return;}
+  el.textContent=(val>0?'+':'')+fmt(val);
+  el.className='stat-delta '+(val>0?'pos':'neg');
+}
+function getRegime(h){
+  if(h<=0)      return 'No harvest';
+  if(h<0.163)   return 'Below survival threshold';
+  if(h<0.25)    return 'Partial recovery (h_eff–h_crit)';
+  if(h<0.320)   return 'Kiwi bonus zone (h_crit–h_erad)';
+  return 'Stoat suppression (h > h_erad)';
+}
+function setStatus(msg){
+  document.getElementById('run-status').textContent=msg;
+  const lm=document.getElementById('loader-msg');
+  if(lm) lm.textContent=msg;
+}
+function updateHZone(){
+  document.getElementById('h-zone').textContent =
+    getRegime(parseFloat(document.getElementById('h-slider').value));
+}
+function clearPresets(){ document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('active')); }
+
+// ── SLIDER LISTENERS ──────────────────────────────────────────────────────
+document.getElementById('h-slider').addEventListener('input',e=>{
+  document.getElementById('h-val').textContent=parseFloat(e.target.value).toFixed(2);
+  clearPresets(); updateHZone();
+});
+document.getElementById('t-slider').addEventListener('input',e=>{
+  document.getElementById('t-val').textContent=e.target.value; clearPresets();
+});
+document.getElementById('tmax-slider').addEventListener('input',e=>{
+  document.getElementById('tmax-val').textContent=e.target.value+' yr'; clearPresets();
+});
+
+// ── PRESET BUTTONS ────────────────────────────────────────────────────────
+document.querySelectorAll('.preset-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    clearPresets();
+    btn.classList.add('active');
+    const h=parseFloat(btn.dataset.h), t=parseInt(btn.dataset.t), tm=parseInt(btn.dataset.tmax);
+    document.getElementById('h-slider').value=h;
+    document.getElementById('t-slider').value=t;
+    document.getElementById('tmax-slider').value=tm;
+    document.getElementById('h-val').textContent=h.toFixed(2);
+    document.getElementById('t-val').textContent=t;
+    document.getElementById('tmax-val').textContent=tm+' yr';
+    updateHZone();
+    if(pyReady) runSim();
+  });
+});
+
+document.getElementById('run-btn').addEventListener('click', runSim);
+
+// ── BOOT ──────────────────────────────────────────────────────────────────
+initPyodide().catch(err=>{
+  setStatus('Failed to load: '+err.message);
+  document.getElementById('loader').style.display='none';
+});
+</script>
+</body>
+</html>
