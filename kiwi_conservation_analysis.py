@@ -1680,14 +1680,13 @@ def analyze_field_data():
 def plot_foraging_vs_harvest_rate(hybrid_model, intervention_year=5, t_max=None):
     """
     Sweeps stoat harvest rate h from 0 to 0.72 and plots equilibrium open
-    foraging proportion x at t_max as a continuous curve.
+    foraging proportion x at t_max as a continuous curve, with kiwi
+    population K at t_max on a secondary y-axis.
 
-    Updated with corrected four-zone regime shading based on nullcline analysis:
-      Zone 1 (red):    h < h_eff ≈ 0.16        — failed management
+    Zone definitions:
+      Zone 1 (red):    h < h_eff ≈ 0.165       — failed management
       Zone 2 (orange): h_eff to h_crit = 0.25  — partial recovery
-      Zone 3 (yellow): h_crit to h_erad ≈ 0.32 — kiwi bonus zone
-                       stoats persist through kiwi predation bonus despite
-                       non-kiwi equilibrium collapse
+      Zone 3 (yellow): h_crit to h_erad ≈ 0.320 — kiwi bonus zone
       Zone 4 (green):  h_erad to h_erad_theo   — full suppression
       Zone 5 (blue):   h ≥ h_erad_theo = 0.60  — PF2050/eradication
 
@@ -1703,37 +1702,43 @@ def plot_foraging_vs_harvest_rate(hybrid_model, intervention_year=5, t_max=None)
     # Derived thresholds
     H_CRIT      = R_STOAT - 0.35
     H_ERAD_THEO = R_STOAT
-    H_EFF       = 0.16
-    f_Kmax      = 0.044*150/(1+0.044*0.1*150)
-    H_ERAD_TRUE = H_CRIT + 0.0175*f_Kmax        # ≈ 0.320
+    H_EFF       = 0.165
+    f_Kmax      = 0.044 * 150 / (1 + 0.044 * 0.1 * 150)
+    H_ERAD_TRUE = H_CRIT + 0.0175 * f_Kmax        # ≈ 0.320
+    K_MAX_VAL   = 150
+    SIM_ESS     = 76.2   # simulated dynamic ESS (v7b)
 
     a_p, b_p = hybrid_model.base_payoffs[0]
     c_p, d_p = hybrid_model.base_payoffs[1]
-    denom    = (a_p-b_p)+(d_p-c_p)
-    x_star   = float(np.clip((d_p-b_p)/denom, 0, 1)) if abs(denom)>1e-10 else 0.5
+    denom    = (a_p - b_p) + (d_p - c_p)
+    x_star   = float(np.clip((d_p - b_p) / denom, 0, 1)) if abs(denom) > 1e-10 else 0.5
 
     print("\n" + "="*70)
-    print("FORAGING STRATEGY vs HARVEST RATE SWEEP (four-zone)")
+    print("FORAGING STRATEGY vs HARVEST RATE SWEEP (five-zone)")
     print(f"  Intervention year={intervention_year},  t_max={t_max}")
-    print(f"  h_crit={H_CRIT:.3f}  h_erad={H_ERAD_TRUE:.4f}  "
+    print(f"  h_eff={H_EFF}  h_crit={H_CRIT:.3f}  h_erad={H_ERAD_TRUE:.4f}  "
           f"h_erad_theo={H_ERAD_THEO:.2f}")
     print("="*70)
 
     h_vals = np.linspace(0.0, 0.72, 120)
     x_eq   = []
+    K_eq   = []
     for hv in h_vals:
         try:
-            t_s, x_s, _, _ = hybrid_model.simulate_hybrid_dynamics(
+            t_s, x_s, K_s, S_s = hybrid_model.simulate_hybrid_dynamics(
                 [X0, K0, S0], t_max,
                 intervention_time=intervention_year,
                 harvest_rate=hv
             )
-            x_eq.append(float(x_s[-1])*100)
+            x_eq.append(float(x_s[-1]) * 100)
+            K_eq.append(float(K_s[-1]))
         except Exception:
             x_eq.append(np.nan)
+            K_eq.append(np.nan)
 
     print(f"  Sweep complete. x range: "
-          f"{np.nanmin(x_eq):.1f}% – {np.nanmax(x_eq):.1f}%")
+          f"{np.nanmin(x_eq):.1f}% – {np.nanmax(x_eq):.1f}%  |  "
+          f"K range: {np.nanmin(K_eq):.1f} – {np.nanmax(K_eq):.1f}")
 
     # ── Plot ─────────────────────────────────────────────────────────────
     import matplotlib.patches as mpatches
@@ -1757,45 +1762,58 @@ def plot_foraging_vs_harvest_rate(hybrid_model, intervention_year=5, t_max=None)
     ]:
         ax.axvline(xv, color=col, linestyle='--', linewidth=1.5, alpha=0.9)
 
-    ax.axhline(x_star*100, color='#555', linestyle=':',  linewidth=1.2,
+    ax.axhline(x_star * 100, color='#555', linestyle=':', linewidth=1.2,
                label=f'Analytical ESS x*={x_star*100:.2f}%')
-    ax.axhline(66.28,      color='#555', linestyle='-.', linewidth=1.2,
-               label='Simulated dynamic ESS ≈66.3%')
-    ax.axhline(X0*100,     color='black', linestyle=':', linewidth=1.0,
+    ax.axhline(SIM_ESS, color='#555', linestyle='-.', linewidth=1.2,
+               label=f'Simulated dynamic ESS ≈{SIM_ESS}%')
+    ax.axhline(X0 * 100, color='black', linestyle=':', linewidth=1.0,
                alpha=0.45, label=f'Initial x₀={X0*100:.0f}%')
 
     ax.plot(h_vals, x_eq, color='#111', linewidth=2.4, zorder=6,
             label='CEPPM equilibrium x(h)')
 
     for xc, lbl in [
-        (H_EFF/2,                     'Failed\nmanagement'),
-        ((H_EFF+H_CRIT)/2,            'Partial\nrecovery'),
-        ((H_CRIT+H_ERAD_TRUE)/2,      'Kiwi bonus\nzone'),
-        ((H_ERAD_TRUE+H_ERAD_THEO)/2, 'Full\nsuppression'),
-        ((H_ERAD_THEO+0.73)/2,        'PF2050\nzone'),
+        (H_EFF / 2,                      'Failed\nmanagement'),
+        ((H_EFF + H_CRIT) / 2,           'Partial\nrecovery'),
+        ((H_CRIT + H_ERAD_TRUE) / 2,     'Kiwi bonus\nzone'),
+        ((H_ERAD_TRUE + H_ERAD_THEO) / 2,'Full\nsuppression'),
+        ((H_ERAD_THEO + 0.73) / 2,       'PF2050\nzone'),
     ]:
         ax.text(xc, 84, lbl, ha='center', va='top', fontsize=8,
                 color='#333', style='italic', linespacing=1.3)
 
+    # ── Secondary axis: K@200 ─────────────────────────────────────────────
+    ax2 = ax.twinx()
+    ax2.plot(h_vals, K_eq, color='#2ca02c', linewidth=1.8, linestyle='-',
+             alpha=0.75, zorder=5, label='Kiwi population K(h)')
+    ax2.set_ylabel('Kiwi population at t=200  (K)', fontsize=12, color='#2ca02c')
+    ax2.tick_params(axis='y', labelcolor='#2ca02c')
+    ax2.set_ylim(0, K_MAX_VAL * 1.15)   # headroom above K_max=150
+    ax2.axhline(K_MAX_VAL, color='#2ca02c', linestyle=':', linewidth=1.0, alpha=0.5)
+    ax2.text(0.705, K_MAX_VAL + 2, f'K_max={K_MAX_VAL}', fontsize=8,
+             color='#2ca02c', ha='right', va='bottom')
+
     ax.set_xlabel('Stoat harvest rate  h  (annual proportion removed)', fontsize=12)
     ax.set_ylabel('Open foraging proportion at t=200  (%)', fontsize=12)
     ax.set_title(
-        f'CEPPM — Equilibrium foraging strategy vs harvest rate\n'
-        f'Intervention yr={intervention_year}  t={t_max}  '
-        f'K₀={K0}  S₀={S0}  x₀={X0*100:.0f}%  |  '
+        f'CEPPM — Equilibrium foraging strategy vs harvest rate and kiwi population\n'
+        f'v7: a={a_p}, b={b_p}, c={c_p}, d={d_p}, κ=1.5/yr  |  '
         f'h_crit={H_CRIT:.2f}  h_erad={H_ERAD_TRUE:.3f}  '
-        f'PI_BAR_ESS={hybrid_model.egt_model.average_payoff(x_star):.4f}',
+        f'x*={x_star*100:.2f}%  PI_BAR_ESS={hybrid_model.egt_model.average_payoff(x_star):.4f}',
         fontsize=10
     )
-    ax.set_xlim(0, 0.72); ax.set_ylim(0, 90)
-    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v,_: f'{v:.2f}'))
+    ax.set_xlim(0, 0.72)
+    ax.set_ylim(0, 90)
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{v:.2f}'))
 
     legend_els = [
         plt.Line2D([0],[0], color='#111', lw=2.2, label='CEPPM equilibrium x(h)'),
+        plt.Line2D([0],[0], color='#2ca02c', lw=1.8, alpha=0.75,
+                   label='Kiwi population K(h)'),
         plt.Line2D([0],[0], color='#555', ls=':', lw=1.2,
                    label=f'Analytical ESS x*={x_star*100:.2f}%'),
         plt.Line2D([0],[0], color='#555', ls='-.', lw=1.2,
-                   label='Simulated ESS ≈66.3%'),
+                   label=f'Simulated ESS ≈{SIM_ESS}%'),
         plt.Line2D([0],[0], color='black', ls=':', lw=1.0, alpha=0.5,
                    label=f'Initial x₀={X0*100:.0f}%'),
         plt.Line2D([0],[0], color='#d62728', ls='--', lw=1.5,
@@ -1816,22 +1834,22 @@ def plot_foraging_vs_harvest_rate(hybrid_model, intervention_year=5, t_max=None)
               framealpha=0.92, ncol=2)
     ax.grid(True, alpha=0.20)
     plt.tight_layout()
-    plt.savefig('Figure7_foraging_vs_harvest_rate.png', dpi=160, bbox_inches='tight')
+    plt.savefig('foraging_vs_harvest_rate.png', dpi=160, bbox_inches='tight')
     plt.show()
-    print("  Saved: Figure7_foraging_vs_harvest_rate.png")
+    print("  Saved: foraging_vs_harvest_rate.png")
 
     print(f"\n  Key values from sweep:")
     for hv_check, label in [
-        (0.00, 'h=0.00 (unmanaged)'),
+        (0.00,        'h=0.00 (unmanaged)'),
         (H_EFF,       f'h≈{H_EFF} (eff. recovery threshold)'),
         (H_CRIT,      f'h_crit={H_CRIT:.2f}'),
         (H_ERAD_TRUE, f'h_erad≈{H_ERAD_TRUE:.3f}'),
         (H_ERAD_THEO, f'h_erad_theo={H_ERAD_THEO:.2f}'),
     ]:
-        idx = int(np.argmin(np.abs(h_vals-hv_check)))
-        print(f"    x at {label}: {x_eq[idx]:.1f}%")
+        idx = int(np.argmin(np.abs(h_vals - hv_check)))
+        print(f"    x={x_eq[idx]:.1f}%  K={K_eq[idx]:.1f}  at {label}")
 
-    return h_vals, np.array(x_eq)
+    return h_vals, np.array(x_eq), np.array(K_eq)
 
 
 # ============================================================================
@@ -2230,7 +2248,7 @@ def run_complete_kiwi_analysis():
     print("\n" + "="*70)
     print("STEP 5B: FORAGING STRATEGY vs HARVEST RATE — FOUR-ZONE SWEEP")
     print("="*70)
-    foraging_sweep_h, foraging_sweep_x = plot_foraging_vs_harvest_rate(
+    foraging_sweep_h, foraging_sweep_x, foraging_sweep_K = plot_foraging_vs_harvest_rate(
         hybrid_model, intervention_year=5, t_max=T_MAX
     )
 
