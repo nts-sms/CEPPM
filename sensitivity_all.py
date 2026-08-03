@@ -8,8 +8,8 @@ import matplotlib.gridspec as gridspec
 import warnings
 warnings.filterwarnings('ignore')
 
-# ── Output directory (Colab-compatible) ───────────────────────────────────────
-OUTPUT_DIR = '/content/sensitivity_outputs'
+# ── Output directory ───────────────────────────────────────────────────────────
+OUTPUT_DIR = '/home/claude/work/sensitivity_outputs'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ── Core parameters ───────────────────────────────────────────────────────────
@@ -24,8 +24,29 @@ K_MAX        = 150
 h_handling   = 0.1
 S_FLOOR      = S_MAX * (1 - delta / R_STOAT)
 H_CRIT       = R_STOAT - delta
-f_Kmax_      = 0.044 * 150 / (1 + 0.044 * 0.1 * 150)
-H_ERAD_TRUE  = H_CRIT + beta * f_Kmax_   # ≈ 0.320
+
+# ── h_erad — CORRECTED (session finding) ───────────────────────────────────────
+# Was: f_Kmax_ = 0.044*150/(1+0.044*0.1*150)  -- used alpha_base directly.
+# h_erad = h_crit + beta*f(K_max) linearizes the model's own dS/dt around
+# S=0, so f() must use the SAME alpha_effective the rest of the model uses
+# (alpha_base * avg_vulnerability), evaluated at the CEPPM equilibrium x*
+# (i.e. the EGT equilibrium under the DYNAMIC sigmoid-penalized payoffs,
+# evaluated at S=0 -- NOT the base-payoff EGT x*=0.778, since the sigmoid
+# penalty isn't exactly zero at S=0). This was independently confirmed via
+# Julia/BifurcationKit continuation (crossing located at h≈0.3258).
+_k_sig, _S_mid, _open_max, _cov_max = 3.0, 1.0, 0.30, 0.15
+_sig0  = 1 / (1 + np.exp(-_k_sig * (0 - _S_mid)))
+_a_dyn0 = 0.35 - _open_max * _sig0
+_b_dyn0 = 0.55 - _open_max * _sig0
+_c_dyn0 = 0.45 - _cov_max  * _sig0
+_d_dyn0 = 0.20 - _cov_max  * _sig0
+_x_star_ceppm = (_d_dyn0 - _b_dyn0) / ((_a_dyn0 - _b_dyn0) + (_d_dyn0 - _c_dyn0))
+_avg_vuln0 = 1.3 * _x_star_ceppm + 0.7 * (1 - _x_star_ceppm)
+_alpha_eff0 = alpha * _avg_vuln0
+f_Kmax_      = _alpha_eff0 * 150 / (1 + _alpha_eff0 * 0.1 * 150)
+H_ERAD_TRUE  = H_CRIT + beta * f_Kmax_   # ≈ 0.326 (corrected from ≈0.320)
+print(f"[h_erad fix] x*_CEPPM={_x_star_ceppm:.6f}  alpha_eff={_alpha_eff0:.6f}  "
+      f"H_ERAD_TRUE={H_ERAD_TRUE:.6f}")
 r            = r_base                     # alias — avoids NameError in Parts 3/4
 BASE_PAYOFFS = np.array([[0.35, 0.55],[0.45, 0.20]])   # v7: c=0.45, d=0.20
 
